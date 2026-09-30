@@ -123,5 +123,62 @@ namespace ZeroAgent.Tests
             Assert.True(response.Success);
             Assert.Contains("1.2 mm/s", response.Output);
         }
+
+        [Fact]
+        public async Task AgentToolRegistry_EnforcesHitlApprovalPolicy()
+        {
+            var registry = new AgentToolRegistry();
+            var dangerousTool = new AgentTool(
+                "StopTurbine",
+                "Emergency shutdown of cooling turbine.",
+                "int turbineId",
+                arg => Task.FromResult($"Turbine {arg} halted.")
+            ).WithApproval(true);
+
+            registry.Register(dangerousTool);
+
+            // 1. Without ApprovalHandler -> Safety policy violation
+            string result1 = await registry.ExecuteAsync("StopTurbine", "4");
+            Assert.Contains("Safety Policy Violation", result1);
+
+            // 2. With ApprovalHandler returning false -> Action rejected
+            registry.ApprovalHandler = (tool, arg) => Task.FromResult(false);
+            string result2 = await registry.ExecuteAsync("StopTurbine", "4");
+            Assert.Contains("Action rejected", result2);
+
+            // 3. With ApprovalHandler returning true -> Action executed
+            registry.ApprovalHandler = (tool, arg) => Task.FromResult(true);
+            string result3 = await registry.ExecuteAsync("StopTurbine", "4");
+            Assert.Equal("Turbine 4 halted.", result3);
+        }
+
+        [Fact]
+        public void AgentToolRegistry_GeneratesJsonSchemaAndToolPrompt()
+        {
+            var registry = new AgentToolRegistry();
+            var schema = new ZeroPrompt.Core.Grammar.JsonSchemaConstraint("ReadRegister")
+                .AddProperty("address", ZeroPrompt.Core.Grammar.SchemaPropertyType.Number, required: true)
+                .AddProperty("count", ZeroPrompt.Core.Grammar.SchemaPropertyType.Number, required: false);
+
+            var tool = new AgentTool(
+                "ReadPlcRegister",
+                "Reads 16-bit register from industrial PLC.",
+                "address, count",
+                arg => Task.FromResult("OK"),
+                schema: schema,
+                requiresApproval: true
+            );
+
+            registry.Register(tool);
+
+            string prompt = registry.GetToolsPrompt();
+            Assert.Contains("ReadPlcRegister", prompt);
+            Assert.Contains("[REQUIRES OPERATOR APPROVAL]", prompt);
+
+            string jsonSchema = registry.GetToolsJsonSchema();
+            Assert.Contains("\"name\":\"ReadPlcRegister\"", jsonSchema);
+            Assert.Contains("\"address\":{\"type\":\"number\"}", jsonSchema);
+            Assert.Contains("\"required\":[\"address\"]", jsonSchema);
+        }
     }
 }
