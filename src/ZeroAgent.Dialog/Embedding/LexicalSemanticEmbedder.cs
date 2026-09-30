@@ -8,7 +8,7 @@ namespace ZeroAgent.Dialog.Embedding
     /// Converts text queries into high-dimensional unit-norm vectors via signed character/word n-gram feature hashing.
     /// Operates in sub-50 microseconds on CPU with zero machine learning dependencies.
     /// </summary>
-    public sealed class LexicalSemanticEmbedder
+    public class LexicalSemanticEmbedder : ITextEmbedder
     {
         public int Dimension { get; }
 
@@ -19,14 +19,14 @@ namespace ZeroAgent.Dialog.Embedding
             Dimension = dimension;
         }
 
-        public float[] Embed(string text)
+        public virtual float[] Embed(string text)
         {
             var vector = new float[Dimension];
             Embed(text, vector);
             return vector;
         }
 
-        public void Embed(string text, Span<float> destination)
+        public virtual void Embed(string text, Span<float> destination)
         {
             if (destination.Length < Dimension)
                 throw new ArgumentException($"Destination span must be at least {Dimension} elements.");

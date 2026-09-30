@@ -22,8 +22,13 @@ namespace ZeroAgent.Dialog.Memory
         public LexicalSemanticEmbedder Embedder { get; }
 
         public AgenticMemoryEngine(int dimension = 128)
+            : this(dimension, new HybridSemanticEmbedder(dimension))
         {
-            Embedder = new LexicalSemanticEmbedder(dimension);
+        }
+
+        public AgenticMemoryEngine(int dimension, LexicalSemanticEmbedder embedder)
+        {
+            Embedder = embedder ?? new HybridSemanticEmbedder(dimension);
             Episodic = new EpisodicMemory(dimension);
             Semantic = new SemanticMemory(dimension);
             ResponseCache = new SemanticResponseCache(dimension);

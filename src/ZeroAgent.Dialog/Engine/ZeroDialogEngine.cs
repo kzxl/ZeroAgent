@@ -75,6 +75,13 @@ namespace ZeroAgent.Dialog.Engine
             {
                 if (Memory.ResponseCache.TryGet(queryEmbedding, resolvedMessage, minSimilarity: 0.95f, out var cachedEntry) && cachedEntry != null)
                 {
+                    // Synchronize active slots from query so working memory stays updated on cache hits
+                    Dst.AdvanceSession(session, resolvedMessage, null);
+                    foreach (var kvp in session.Slots)
+                    {
+                        workingMemory.SetSlot(kvp.Key, kvp.Value);
+                    }
+
                     workingMemory.AddTurn(userMessage, cachedEntry.ResponseText, cachedEntry.IntentName ?? "SEMANTIC_CACHE_HIT");
                     return new DialogResponse(
                         cachedEntry.ResponseText,
@@ -110,14 +117,16 @@ namespace ZeroAgent.Dialog.Engine
                 || resolvedMessage.IndexOf("sop", StringComparison.OrdinalIgnoreCase) >= 0
                 || resolvedMessage.IndexOf("tài liệu", StringComparison.OrdinalIgnoreCase) >= 0;
 
-            float semMinScore = isDocQuery ? 0.20f : 0.65f;
-            var faqMatches = Memory.Semantic.Query(queryEmbedding, topK: 1, minScore: semMinScore);
-            if (faqMatches.Count > 0 && (isDocQuery || session.State == SessionState.Idle || session.State == SessionState.Completed))
+            if (isDocQuery)
             {
-                var doc = faqMatches[0].Item;
-                string faqAnswer = $"📖 [Tài liệu {doc.Category} - {doc.Title}]:\n{doc.Content}";
-                workingMemory.AddTurn(userMessage, faqAnswer, "KNOWLEDGE_RETRIEVAL");
-                return new DialogResponse(faqAnswer, SessionState.Idle, intentName: "KNOWLEDGE_RETRIEVAL", confidence: faqMatches[0].Similarity);
+                var faqMatches = Memory.Semantic.Query(queryEmbedding, topK: 1, minScore: 0.20f);
+                if (faqMatches.Count > 0)
+                {
+                    var doc = faqMatches[0].Item;
+                    string faqAnswer = $"📖 [Tài liệu {doc.Category} - {doc.Title}]:\n{doc.Content}";
+                    workingMemory.AddTurn(userMessage, faqAnswer, "KNOWLEDGE_RETRIEVAL");
+                    return new DialogResponse(faqAnswer, SessionState.Idle, intentName: "KNOWLEDGE_RETRIEVAL", confidence: faqMatches[0].Similarity);
+                }
             }
 
             // Step 5: Check Episodic Memory (Historical incidents)
@@ -226,6 +235,16 @@ namespace ZeroAgent.Dialog.Engine
                     workingMemory.AddTurn(userMessage, escalated.Text, escalated.IntentName ?? "COGNITIVE_DELIBERATION_REACT");
                     return escalated;
                 }
+            }
+
+            // Step 8.5: Fallback Knowledge Retrieval from Semantic Memory for Unmatched Queries
+            var fallbackFaq = Memory.Semantic.Query(queryEmbedding, topK: 1, minScore: 0.50f);
+            if (fallbackFaq.Count > 0)
+            {
+                var doc = fallbackFaq[0].Item;
+                string faqAnswer = $"📖 [Tài liệu {doc.Category} - {doc.Title}]:\n{doc.Content}";
+                workingMemory.AddTurn(userMessage, faqAnswer, "KNOWLEDGE_RETRIEVAL");
+                return new DialogResponse(faqAnswer, SessionState.Idle, intentName: "KNOWLEDGE_RETRIEVAL", confidence: fallbackFaq[0].Similarity);
             }
 
             // Step 9: Fallback
