@@ -35,7 +35,12 @@ namespace ZeroAgent.Dialog.Engine
             // Build AgentContext with active subject and operator profile
             var context = new AgentContext(query, maxSteps: 8);
 
-            // 1. Seed active entities from Working Memory
+            // 1. Seed active entities and historical summary from Working Memory
+            if (!string.IsNullOrWhiteSpace(workingMemory.SummaryContext))
+            {
+                context.AddMessage(AgentRole.System, workingMemory.SummaryContext!);
+            }
+
             if (!string.IsNullOrEmpty(workingMemory.CurrentSubject))
             {
                 context.AddMessage(AgentRole.System, $"Active target entity: {workingMemory.CurrentSubject}. Operator: {profile.Name} (Role: {profile.Role})");

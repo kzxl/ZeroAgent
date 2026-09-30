@@ -24,7 +24,7 @@ namespace ZeroAgent.Dialog.Memory
     /// Working Memory (Short-Term Conversational Memory).
     /// Tracks active dialogue session state, slot accumulation, and resolves anaphora/pronoun references across turns.
     /// </summary>
-    public sealed class WorkingMemory
+    public sealed partial class WorkingMemory
     {
         private readonly List<DialogTurn> _turns = new List<DialogTurn>();
         private readonly Dictionary<string, string> _activeSlots = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -45,21 +45,21 @@ namespace ZeroAgent.Dialog.Memory
         public void AddTurn(string userMessage, string botResponse, string intent)
         {
             _turns.Add(new DialogTurn(userMessage, botResponse, intent));
-            if (_turns.Count > 50)
+            if (_turns.Count > _maxRetainedTurns)
             {
-                _turns.RemoveAt(0);
+                CompactOldestTurns(_turns.Count - _maxRetainedTurns);
             }
         }
 
         /// <summary>
-        /// Applies Knapsack token budgeting to truncate history to fit within a model's context window.
-        /// Preserves the most recent turns and essential state, discarding older turns when the estimated token count exceeds the budget.
+        /// Applies Knapsack token budgeting to compact history to fit within a model's context window.
+        /// Preserves the most recent turns and essential state, compressing evicted older turns into SummaryContext.
         /// </summary>
         public int PruneToTokenBudget(int maxTokens, Func<string, int>? tokenEstimator = null)
         {
             if (maxTokens <= 0 || _turns.Count <= 1) return 0;
 
-            tokenEstimator ??= DefaultTokenEstimator;
+            tokenEstimator ??= _compactor.EstimateTokens;
 
             int totalTokens = 0;
             for (int i = 0; i < _turns.Count; i++)
@@ -67,16 +67,21 @@ namespace ZeroAgent.Dialog.Memory
                 totalTokens += tokenEstimator(_turns[i].UserMessage) + tokenEstimator(_turns[i].BotResponse);
             }
 
-            int pruned = 0;
+            var prunedBatch = new List<DialogTurn>();
             while (totalTokens > maxTokens && _turns.Count > 1)
             {
                 var removed = _turns[0];
                 _turns.RemoveAt(0);
+                prunedBatch.Add(removed);
                 totalTokens -= (tokenEstimator(removed.UserMessage) + tokenEstimator(removed.BotResponse));
-                pruned++;
             }
 
-            return pruned;
+            if (prunedBatch.Count > 0)
+            {
+                SummaryContext = _compactor.CompactTurns(prunedBatch, _activeSlots, SummaryContext);
+            }
+
+            return prunedBatch.Count;
         }
 
         private static int DefaultTokenEstimator(string text)

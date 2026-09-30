@@ -45,7 +45,7 @@ namespace ZeroAgent.Core.Engine
                 currentStep++;
 
                 // 1. Build prompt
-                string prompt = BuildPrompt(context.Goal, conversation.ToString());
+                string prompt = BuildPrompt(context, conversation.ToString());
 
                 // 2. Query LLM
                 string completion = await Llm.CompleteAsync(prompt, cancellationToken).ConfigureAwait(false);
@@ -62,7 +62,8 @@ namespace ZeroAgent.Core.Engine
                 if (ToolCallParser.TryParseToolCall(completion, out var toolCall))
                 {
                     var response = await Tools.ExecuteCallAsync(toolCall).ConfigureAwait(false);
-                    string observation = response.Success ? response.Content : $"Error: {response.ErrorMessage}";
+                    string rawObservation = response.Success ? response.Content : $"Error: {response.ErrorMessage}";
+                    string observation = ObservationCompactor.Compact(toolCall.ToolName, rawObservation);
                     context.AddMessage(AgentRole.Tool, observation, toolCall.ToolName);
 
                     conversation.AppendLine(completion);
@@ -80,7 +81,7 @@ namespace ZeroAgent.Core.Engine
             return AgentResponse.Failed($"Agent exceeded maximum step limit ({context.MaxSteps}) without reaching a final answer.", currentStep, sw.Elapsed, context.History);
         }
 
-        private string BuildPrompt(string goal, string trajectory)
+        private string BuildPrompt(AgentContext context, string trajectory)
         {
             var optimizer = new PromptLayoutOptimizer();
 
@@ -97,13 +98,48 @@ namespace ZeroAgent.Core.Engine
 
             optimizer.AddSystem(systemInstruction, "react_system_instruction");
 
+            // 1.1 Injected System Directives & Context Summaries
+            if (context != null)
+            {
+                for (int i = 0; i < context.History.Count; i++)
+                {
+                    var msg = context.History[i];
+                    if (msg.Role == AgentRole.System && !string.IsNullOrWhiteSpace(msg.Content))
+                    {
+                        optimizer.AddSystem(msg.Content, $"system_context_{i}");
+                    }
+                }
+            }
+
             // 2. Static Tool Definitions
             optimizer.AddTools(Tools.GetToolsPrompt(), "react_tool_definitions");
 
-            // 3. User Goal
-            optimizer.AddUserQuery($"Begin!\nGoal: {goal}", "react_goal");
+            // 3. Prior Dialogue History
+            if (context != null)
+            {
+                var historySb = new StringBuilder();
+                for (int i = 0; i < context.History.Count; i++)
+                {
+                    var msg = context.History[i];
+                    if (msg.Role == AgentRole.User && msg.Content != context.Goal)
+                    {
+                        historySb.AppendLine($"User: {msg.Content}");
+                    }
+                    else if (msg.Role == AgentRole.Assistant)
+                    {
+                        historySb.AppendLine($"Assistant: {msg.Content}");
+                    }
+                }
+                if (historySb.Length > 0)
+                {
+                    optimizer.AddHistory(historySb.ToString().TrimEnd(), "prior_dialog_history");
+                }
+            }
 
-            // 4. Dynamic Trajectory
+            // 4. User Goal
+            optimizer.AddUserQuery($"Begin!\nGoal: {context?.Goal ?? string.Empty}", "react_goal");
+
+            // 5. Dynamic Trajectory
             if (!string.IsNullOrWhiteSpace(trajectory))
             {
                 optimizer.AddHistory(trajectory, "react_trajectory");
