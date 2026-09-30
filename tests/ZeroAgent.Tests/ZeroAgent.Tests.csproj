@@ -19,5 +19,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ZeroAgent.Core\ZeroAgent.Core.csproj" />
     <ProjectReference Include="..\..\src\ZeroAgent.Tools\ZeroAgent.Tools.csproj" />
+    <ProjectReference Include="..\..\src\ZeroAgent.Dialog\ZeroAgent.Dialog.csproj" />
   </ItemGroup>
 </Project>
