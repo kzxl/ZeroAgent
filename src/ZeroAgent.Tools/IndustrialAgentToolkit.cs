@@ -33,6 +33,7 @@ namespace ZeroAgent.Tools
             TsdbQueryTool.RegisterAll(registry);
             HostTelemetryTool.RegisterAll(registry);
             DataFrameQueryTool.RegisterAll(registry);
+            DynamicDatabaseQueryTool.RegisterAll(registry);
 
             return registry;
         }

@@ -26,5 +26,14 @@
 
     <ProjectReference Include="..\..\..\ZeroConcurrency\src\ZeroConcurrency\ZeroConcurrency.csproj" Condition="Exists('..\..\..\ZeroConcurrency\src\ZeroConcurrency\ZeroConcurrency.csproj')" />
     <PackageReference Include="ZeroConcurrency" Version="1.0.0" Condition="!Exists('..\..\..\ZeroConcurrency\src\ZeroConcurrency\ZeroConcurrency.csproj')" />
+
+    <ProjectReference Include="..\..\..\ZeroData\src\ZeroData.Core\ZeroData.Core.csproj" Condition="Exists('..\..\..\ZeroData\src\ZeroData.Core\ZeroData.Core.csproj')" />
+    <PackageReference Include="ZeroData.Core" Version="1.4.0" Condition="!Exists('..\..\..\ZeroData\src\ZeroData.Core\ZeroData.Core.csproj')" />
+
+    <ProjectReference Include="..\..\..\ZeroData\src\ZeroData.Sql\ZeroData.Sql.csproj" Condition="Exists('..\..\..\ZeroData\src\ZeroData.Sql\ZeroData.Sql.csproj')" />
+    <PackageReference Include="ZeroData.Sql" Version="1.0.0" Condition="!Exists('..\..\..\ZeroData\src\ZeroData.Sql\ZeroData.Sql.csproj')" />
+
+    <ProjectReference Include="..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj" Condition="Exists('..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj')" />
+    <PackageReference Include="ZeroVector.Core" Version="1.0.0" Condition="!Exists('..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj')" />
   </ItemGroup>
 </Project>

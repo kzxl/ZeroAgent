@@ -55,6 +55,11 @@ namespace ZeroAgent.Core.Tools
             return _tools.TryGetValue(name, out tool!);
         }
 
+        public AgentTool? Get(string name)
+        {
+            return _tools.TryGetValue(name, out var tool) ? tool : null;
+        }
+
         public async Task<string> ExecuteAsync(string name, string argument)
         {
             if (!_tools.TryGetValue(name, out var tool))
@@ -78,6 +83,65 @@ namespace ZeroAgent.Core.Tools
             }
 
             return await tool.ExecuteAsync(argument).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Executes a structured tool call request with high-resolution duration measurement and error tracking.
+        /// </summary>
+        public async Task<ToolCallResponse> ExecuteCallAsync(ToolCallRequest request)
+        {
+            if (request == null) throw new ArgumentNullException(nameof(request));
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            if (!_tools.TryGetValue(request.ToolName, out var tool))
+            {
+                sw.Stop();
+                return ToolCallResponse.CreateFailure(request.CallId, request.ToolName, $"Tool '{request.ToolName}' is not registered.", sw.Elapsed);
+            }
+
+            if (tool.RequiresApproval)
+            {
+                if (ApprovalHandler == null)
+                {
+                    sw.Stop();
+                    return ToolCallResponse.CreateFailure(request.CallId, request.ToolName, $"Tool '{request.ToolName}' requires HITL approval, but no ApprovalHandler is configured.", sw.Elapsed);
+                }
+
+                bool approved = await ApprovalHandler(tool, request.ArgumentsJson).ConfigureAwait(false);
+                if (!approved)
+                {
+                    sw.Stop();
+                    return ToolCallResponse.CreateFailure(request.CallId, request.ToolName, $"Execution denied by operator safety gate.", sw.Elapsed);
+                }
+            }
+
+            try
+            {
+                string result = await tool.ExecuteAsync(request.ArgumentsJson).ConfigureAwait(false);
+                sw.Stop();
+                return ToolCallResponse.CreateSuccess(request.CallId, request.ToolName, result, sw.Elapsed);
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                return ToolCallResponse.CreateFailure(request.CallId, request.ToolName, ex.Message, sw.Elapsed);
+            }
+        }
+
+        /// <summary>
+        /// Executes multiple tool calls sequentially or in parallel, preserving call IDs.
+        /// </summary>
+        public async Task<ToolCallResponse[]> ExecuteBatchAsync(IEnumerable<ToolCallRequest> requests)
+        {
+            if (requests == null) return Array.Empty<ToolCallResponse>();
+
+            var list = new List<ToolCallRequest>(requests);
+            var results = new ToolCallResponse[list.Count];
+            for (int i = 0; i < list.Count; i++)
+            {
+                results[i] = await ExecuteCallAsync(list[i]).ConfigureAwait(false);
+            }
+            return results;
         }
 
         /// <summary>

@@ -78,6 +78,28 @@ namespace ZeroAgent.Dialog
 
             engine.Dst.RegisterIntent(stopIntent);
 
+            // 3. Intent: QUERY_DATABASE_RECORDS (Dynamic self-describing table query)
+            var dbQueryIntent = new DialogueIntent("QUERY_DATABASE_RECORDS", "Truy vấn dữ liệu bảng từ cơ sở dữ liệu hoặc DataFrame")
+                .AddSamples(
+                    "truy vấn dữ liệu thiết bị",
+                    "cho tôi xem bảng máy móc",
+                    "danh sách máy móc",
+                    "dữ liệu bảng factory_machines",
+                    "kiểm tra bảng dữ liệu",
+                    "xem danh sách thiết bị",
+                    "query database table")
+                .AddTemplates(
+                    "Kết quả truy vấn dữ liệu: {{output}}",
+                    "Dữ liệu bảng thiết bị trích xuất được: {{output}}")
+                ;
+
+            dbQueryIntent.ActionHandler = async session =>
+            {
+                return await registry.ExecuteAsync("db_query_table", "{\"tableName\":\"factory_machines\",\"limit\":5}").ConfigureAwait(false);
+            };
+
+            engine.Dst.RegisterIntent(dbQueryIntent);
+
             if (enableNeuralClassifier)
             {
                 engine.Dst.EnableNeuralClassifier(epochs: 60, learningRate: 0.05f);
