@@ -35,9 +35,13 @@ namespace ZeroAgent.Dialog.Memory
 
         public int Count => _items.Count;
 
-        public SemanticMemory(int dimension = 128)
+        public SemanticMemory(int dimension = 128) : this(new TwoStageVectorIndex(dimension, 64, VectorMetricType.Cosine, QuantizationStorageMode.ExactFp32, oversampleFactor: 4))
         {
-            _vectorIndex = new FlatVectorIndex(dimension, defaultMetric: VectorMetricType.Cosine);
+        }
+
+        public SemanticMemory(IVectorIndex vectorIndex)
+        {
+            _vectorIndex = vectorIndex ?? throw new ArgumentNullException(nameof(vectorIndex));
         }
 
         public SemanticKnowledgeItem Add(string title, string content, ReadOnlySpan<float> embedding, string category = "SOP")

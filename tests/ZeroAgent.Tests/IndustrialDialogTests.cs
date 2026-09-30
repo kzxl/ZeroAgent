@@ -114,5 +114,33 @@ namespace ZeroAgent.Tests
             Assert.Contains("Lệnh dừng thiết bị CNC-01", r2.Text);
             Assert.True(r2.IsActionExecuted);
         }
+
+        [Fact]
+        public void EpisodicMemory_EbbinghausDecayAndFrequencyReinforcement_CalculatesRetentionCorrectly()
+        {
+            var episodic = new EpisodicMemory(dimension: 16);
+            float[] vec = new float[16];
+            vec[0] = 1.0f;
+
+            var episode = episodic.Record("Motor overheating error 502", "Replaced cooling pump and flushed radiator", vec, success: true, halfLifeHours: 24.0);
+
+            Assert.Equal(1, episode.AccessCount);
+
+            // Fresh retention at t=0 should be 1.0
+            float freshRetention = episode.ComputeRetention(episode.LastAccessedUtc);
+            Assert.Equal(1.0f, freshRetention, precision: 3);
+
+            // Recall increases access frequency
+            var recalled = episodic.Recall(vec, topK: 1);
+            Assert.NotEmpty(recalled);
+            Assert.Equal(2, episode.AccessCount);
+
+            // Simulate 24 hours later (one half-life)
+            var futureTime = episode.LastAccessedUtc.AddHours(24.0);
+            float decayedRetention = episode.ComputeRetention(futureTime);
+
+            // With accessCount = 2, freqBoost = 1 + 0.5 * log2(3) = 1.792 -> tau = 43h -> e^(-24/43) ~= 0.57 > 0.5
+            Assert.True(decayedRetention > 0.5f && decayedRetention < 0.9f, $"Expected reinforced retention in [0.5, 0.9], got {decayedRetention}");
+        }
     }
 }
