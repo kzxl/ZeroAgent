@@ -140,8 +140,8 @@ namespace ZeroAgent.Dialog.Memory
             // English pronouns
             text = Regex.Replace(text, @"\b(it|that machine|this machine|that device|that table|that product)\b", CurrentSubject, RegexOptions.IgnoreCase);
 
-            // Elliptical follow-up questions: "còn áp suất thì sao" -> "kiểm tra áp suất của CNC-01"
-            var ellipticalMatch = Regex.Match(text, @"^còn\s+([a-zA-Z0-9_\u00C0-\u024F\u1E00-\u1EFF\s]+)\s+(thì sao|thế nào)\??$", RegexOptions.IgnoreCase);
+            // Elliptical follow-up questions: "còn áp suất thì sao" or "còn áp suất của nó thì sao" -> "kiểm tra áp suất của CNC-01"
+            var ellipticalMatch = Regex.Match(text, @"^còn\s+([a-zA-Z0-9_\u00C0-\u024F\u1E00-\u1EFF\s]+?)(?:\s+của\s+[a-zA-Z0-9_-]+)?\s+(thì sao|thế nào)\??$", RegexOptions.IgnoreCase);
             if (ellipticalMatch.Success)
             {
                 string metric = ellipticalMatch.Groups[1].Value.Trim();

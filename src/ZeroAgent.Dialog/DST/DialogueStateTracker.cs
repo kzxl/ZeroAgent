@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using ZeroAgent.Dialog.Embedding;
 using ZeroAgent.Dialog.Neural;
@@ -53,16 +55,22 @@ namespace ZeroAgent.Dialog.DST
         /// <summary>
         /// Matches the most semantically relevant intent for the given query vector.
         /// Supports Hybrid routing: Deterministic fast-path -> Deep Neural MLP -> Lexical Cosine fallback.
+        /// Resilient against unaccented Vietnamese, typos, and keyword occurrences.
         /// </summary>
         public (DialogueIntent? Intent, float Score) MatchIntent(ReadOnlySpan<float> queryEmbedding, string rawText)
         {
+            string cleanRaw = rawText.Trim();
+            string rawNormalized = NormalizeDiacritics(cleanRaw);
+
             // 1. Exact phrase / keyword match (Deterministic Fast Path)
             for (int i = 0; i < _sampleEmbeddings.Count; i++)
             {
                 var item = _sampleEmbeddings[i];
                 for (int s = 0; s < item.Intent.SampleUtterances.Count; s++)
                 {
-                    if (string.Equals(rawText.Trim(), item.Intent.SampleUtterances[s], StringComparison.OrdinalIgnoreCase))
+                    string sample = item.Intent.SampleUtterances[s];
+                    if (string.Equals(cleanRaw, sample, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(rawNormalized, NormalizeDiacritics(sample), StringComparison.OrdinalIgnoreCase))
                     {
                         return (item.Intent, 1.0f);
                     }
@@ -78,7 +86,7 @@ namespace ZeroAgent.Dialog.DST
                     // Gatekeeper against closed-world Softmax overconfidence:
                     // Verify the query actually has positive semantic proximity to the intent's sample utterances.
                     float maxSampleSim = GetMaxSampleSimilarity(queryEmbedding, neuralIntent);
-                    if (maxSampleSim >= 0.30f)
+                    if (maxSampleSim >= 0.28f)
                     {
                         return (neuralIntent, confidence);
                     }
@@ -94,12 +102,14 @@ namespace ZeroAgent.Dialog.DST
                 var item = _sampleEmbeddings[i];
                 float sim = VectorMetrics.CosineSimilarity(queryEmbedding, item.SampleEmbedding);
 
-                // Exact phrase / keyword boost
+                // Exact phrase / keyword boost (supporting both accented and unaccented Vietnamese)
                 for (int s = 0; s < item.Intent.SampleUtterances.Count; s++)
                 {
-                    if (rawText.IndexOf(item.Intent.SampleUtterances[s], StringComparison.OrdinalIgnoreCase) >= 0)
+                    string sample = item.Intent.SampleUtterances[s];
+                    if (cleanRaw.IndexOf(sample, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        rawNormalized.IndexOf(NormalizeDiacritics(sample), StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        sim += 0.25f;
+                        sim += 0.35f;
                         break;
                     }
                 }
@@ -117,6 +127,25 @@ namespace ZeroAgent.Dialog.DST
             }
 
             return (bestIntent, maxScore);
+        }
+
+        private static string NormalizeDiacritics(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+            string normalizedString = text.Normalize(NormalizationForm.FormD);
+            var sb = new StringBuilder(normalizedString.Length);
+
+            for (int i = 0; i < normalizedString.Length; i++)
+            {
+                char c = normalizedString[i];
+                var unicodeCategory = CharUnicodeInfo.GetUnicodeCategory(c);
+                if (unicodeCategory != UnicodeCategory.NonSpacingMark)
+                {
+                    sb.Append(c);
+                }
+            }
+
+            return sb.ToString().Normalize(NormalizationForm.FormC).Replace('đ', 'd').Replace('Đ', 'D');
         }
 
         private float GetMaxSampleSimilarity(ReadOnlySpan<float> queryEmbedding, DialogueIntent intent)

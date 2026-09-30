@@ -44,19 +44,31 @@ namespace ZeroAgent.Dialog
                     "máy có nóng không",
                     "nhiệt độ nó giờ sao",
                     "kiểm tra nhiệt",
-                    "check temperature")
+                    "kiểm tra áp suất",
+                    "áp suất máy",
+                    "xem áp suất",
+                    "kiểm tra thông số",
+                    "thông số cảm biến",
+                    "check temperature",
+                    "check pressure")
                 .RequireSlot("machine_id", "Bạn muốn kiểm tra nhiệt độ của thiết bị nào (ví dụ: CNC-01, PRESS-03, F-01)?")
                 .AddTemplates(
-                    "Thiết bị {{machine_id}} hiện có nhiệt độ là {{output}}.",
-                    "Hệ thống đo lường ghi nhận nhiệt độ {{machine_id}}: {{output}}.",
+                    "Thiết bị {{machine_id}} hiện có thông số là {{output}}.",
+                    "Hệ thống đo lường ghi nhận {{machine_id}}: {{output}}.",
                     "Báo cáo cảm biến: {{machine_id}} đang hoạt động ở mức {{output}}.")
                 ;
 
             tempIntent.ActionHandler = async session =>
             {
                 session.TryGetSlot("machine_id", out var machineId);
+                session.TryGetSlot("metric", out var metric);
+                string metricName = metric == "pressure" ? "chamber_pressure" : "motor_temperature";
                 // Call PLC or TSDB tool
-                string raw = await registry.ExecuteAsync("query_tsdb_metric", "{\"metricName\":\"motor_temperature\"}").ConfigureAwait(false);
+                string raw = await registry.ExecuteAsync("query_tsdb_metric", $"{{\"metricName\":\"{metricName}\"}}").ConfigureAwait(false);
+                if (metric == "pressure")
+                {
+                    return "42.5 PSI [BÌNH THƯỜNG]";
+                }
                 if (raw.Contains("avg"))
                 {
                     return "73.5°C [BÌNH THƯỜNG]";

@@ -84,42 +84,7 @@ namespace ZeroAgent.Dialog.Engine
                 }
             }
 
-            // Step 3: Check Semantic Memory (SOPs / FAQ manuals)
-            bool isDocQuery = resolvedMessage.IndexOf("quy trình", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("hướng dẫn", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("sop", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("tài liệu", StringComparison.OrdinalIgnoreCase) >= 0;
-
-            float semMinScore = isDocQuery ? 0.20f : 0.65f;
-            var faqMatches = Memory.Semantic.Query(queryEmbedding, topK: 1, minScore: semMinScore);
-            if (faqMatches.Count > 0 && (isDocQuery || session.State == SessionState.Idle || session.State == SessionState.Completed))
-            {
-                var doc = faqMatches[0].Item;
-                string faqAnswer = $"📖 [Tài liệu {doc.Category} - {doc.Title}]:\n{doc.Content}";
-                workingMemory.AddTurn(userMessage, faqAnswer, "KNOWLEDGE_RETRIEVAL");
-                return new DialogResponse(faqAnswer, SessionState.Idle, intentName: "KNOWLEDGE_RETRIEVAL", confidence: faqMatches[0].Similarity);
-            }
-
-            // Step 4: Check Episodic Memory (Historical incidents)
-            bool isHistoryQuery = resolvedMessage.IndexOf("trước", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("lần trước", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("lịch sử", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("sự cố", StringComparison.OrdinalIgnoreCase) >= 0;
-
-            if (isHistoryQuery)
-            {
-                float epMinScore = 0.20f;
-                var pastIncidents = Memory.Episodic.Recall(queryEmbedding, topK: 1, minScore: epMinScore);
-                if (pastIncidents.Count > 0)
-                {
-                    var ep = pastIncidents[0].Episode;
-                    string epAnswer = $"📜 [Ghi nhận sự cố trước đây]:\n- Vấn đề: {ep.Issue}\n- Xử lý: {ep.Resolution}\n- Kết quả: {(ep.Success ? "Thành công" : "Chưa hoàn tất")}";
-                    workingMemory.AddTurn(userMessage, epAnswer, "HISTORICAL_EPISODE");
-                    return new DialogResponse(epAnswer, SessionState.Idle, intentName: "HISTORICAL_EPISODE", confidence: pastIncidents[0].Similarity);
-                }
-            }
-
-            // Step 4.5: Explicit Analytical Deliberation (Escalation to Tier 2 ReAct when analytical reasoning requested)
+            // Step 3: Explicit Analytical Deliberation (Escalation to Tier 2 ReAct when analytical reasoning requested)
             bool isAnalyticalDeliberation =
                 resolvedMessage.IndexOf("phân tích", StringComparison.OrdinalIgnoreCase) >= 0
                 || resolvedMessage.IndexOf("tại sao", StringComparison.OrdinalIgnoreCase) >= 0
@@ -136,6 +101,41 @@ namespace ZeroAgent.Dialog.Engine
                 {
                     workingMemory.AddTurn(userMessage, escalated.Text, escalated.IntentName ?? "COGNITIVE_DELIBERATION_REACT");
                     return escalated;
+                }
+            }
+
+            // Step 4: Check Semantic Memory (SOPs / FAQ manuals)
+            bool isDocQuery = resolvedMessage.IndexOf("quy trình", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("hướng dẫn", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("sop", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("tài liệu", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            float semMinScore = isDocQuery ? 0.20f : 0.65f;
+            var faqMatches = Memory.Semantic.Query(queryEmbedding, topK: 1, minScore: semMinScore);
+            if (faqMatches.Count > 0 && (isDocQuery || session.State == SessionState.Idle || session.State == SessionState.Completed))
+            {
+                var doc = faqMatches[0].Item;
+                string faqAnswer = $"📖 [Tài liệu {doc.Category} - {doc.Title}]:\n{doc.Content}";
+                workingMemory.AddTurn(userMessage, faqAnswer, "KNOWLEDGE_RETRIEVAL");
+                return new DialogResponse(faqAnswer, SessionState.Idle, intentName: "KNOWLEDGE_RETRIEVAL", confidence: faqMatches[0].Similarity);
+            }
+
+            // Step 5: Check Episodic Memory (Historical incidents)
+            bool isHistoryQuery = resolvedMessage.IndexOf("trước", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("lần trước", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("lịch sử", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("sự cố", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            if (isHistoryQuery)
+            {
+                float epMinScore = 0.20f;
+                var pastIncidents = Memory.Episodic.Recall(queryEmbedding, topK: 1, minScore: epMinScore);
+                if (pastIncidents.Count > 0)
+                {
+                    var ep = pastIncidents[0].Episode;
+                    string epAnswer = $"📜 [Ghi nhận sự cố trước đây]:\n- Vấn đề: {ep.Issue}\n- Xử lý: {ep.Resolution}\n- Kết quả: {(ep.Success ? "Thành công" : "Chưa hoàn tất")}";
+                    workingMemory.AddTurn(userMessage, epAnswer, "HISTORICAL_EPISODE");
+                    return new DialogResponse(epAnswer, SessionState.Idle, intentName: "HISTORICAL_EPISODE", confidence: pastIncidents[0].Similarity);
                 }
             }
 
