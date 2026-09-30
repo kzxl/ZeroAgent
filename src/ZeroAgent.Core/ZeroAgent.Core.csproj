@@ -27,6 +27,9 @@
 
     <ProjectReference Include="..\..\..\ZeroTokenizer\src\ZeroTokenizer.Core\ZeroTokenizer.Core.csproj" Condition="Exists('..\..\..\ZeroTokenizer\src\ZeroTokenizer.Core\ZeroTokenizer.Core.csproj')" />
     <PackageReference Include="ZeroTokenizer.Core" Version="1.0.0" Condition="!Exists('..\..\..\ZeroTokenizer\src\ZeroTokenizer.Core\ZeroTokenizer.Core.csproj')" />
+
+    <ProjectReference Include="..\..\..\ZeroLlm\src\ZeroLlm.Core\ZeroLlm.Core.csproj" Condition="Exists('..\..\..\ZeroLlm\src\ZeroLlm.Core\ZeroLlm.Core.csproj')" />
+    <PackageReference Include="ZeroLlm.Core" Version="1.0.0" Condition="!Exists('..\..\..\ZeroLlm\src\ZeroLlm.Core\ZeroLlm.Core.csproj')" />
   </ItemGroup>
 
   <ItemGroup>
