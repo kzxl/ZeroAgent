@@ -75,7 +75,13 @@ namespace ZeroAgent.Dialog.DST
                 var (neuralIntent, confidence, _) = NeuralClassifier.Predict(queryEmbedding);
                 if (neuralIntent != null && confidence >= 0.70f)
                 {
-                    return (neuralIntent, confidence);
+                    // Gatekeeper against closed-world Softmax overconfidence:
+                    // Verify the query actually has positive semantic proximity to the intent's sample utterances.
+                    float maxSampleSim = GetMaxSampleSimilarity(queryEmbedding, neuralIntent);
+                    if (maxSampleSim >= 0.25f)
+                    {
+                        return (neuralIntent, confidence);
+                    }
                 }
             }
 
@@ -106,6 +112,20 @@ namespace ZeroAgent.Dialog.DST
             }
 
             return (bestIntent, maxScore);
+        }
+
+        private float GetMaxSampleSimilarity(ReadOnlySpan<float> queryEmbedding, DialogueIntent intent)
+        {
+            float max = -1.0f;
+            for (int i = 0; i < _sampleEmbeddings.Count; i++)
+            {
+                if (ReferenceEquals(_sampleEmbeddings[i].Intent, intent))
+                {
+                    float sim = VectorMetrics.CosineSimilarity(queryEmbedding, _sampleEmbeddings[i].SampleEmbedding);
+                    if (sim > max) max = sim;
+                }
+            }
+            return max;
         }
 
         /// <summary>

@@ -93,7 +93,7 @@ namespace ZeroAgent.Dialog
             engine.Memory.Semantic.Add(sop2Title, sop2Content, engine.Memory.Embedder.Embed(sop2Title + " " + sop2Content), "BẢO TRÌ");
 
             // 4. Seed Episodic Memory (Historical incidents)
-            string ep1Issue = "Lỗi quá nhiệt bạc đạn máy CNC-01 ngày 15/09";
+            string ep1Issue = "Lỗi sự cố quá nhiệt bạc đạn máy CNC-01 trước đây ngày 15/09";
             string ep1Res = "Phát hiện kẹt cánh quạt làm mát số 3. Đã thay quạt và bổ sung mỡ bôi trơn. Thiết bị hoạt động ổn định.";
             engine.Memory.Episodic.Record(ep1Issue, ep1Res, engine.Memory.Embedder.Embed(ep1Issue), success: true);
 

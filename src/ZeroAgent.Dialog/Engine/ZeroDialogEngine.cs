@@ -64,7 +64,7 @@ namespace ZeroAgent.Dialog.Engine
                 || resolvedMessage.IndexOf("sop", StringComparison.OrdinalIgnoreCase) >= 0
                 || resolvedMessage.IndexOf("tài liệu", StringComparison.OrdinalIgnoreCase) >= 0;
 
-            float semMinScore = isDocQuery ? 0.35f : 0.65f;
+            float semMinScore = isDocQuery ? 0.20f : 0.65f;
             var faqMatches = Memory.Semantic.Query(queryEmbedding, topK: 1, minScore: semMinScore);
             if (faqMatches.Count > 0 && (isDocQuery || session.State == SessionState.Idle || session.State == SessionState.Completed))
             {
@@ -82,7 +82,8 @@ namespace ZeroAgent.Dialog.Engine
 
             if (isHistoryQuery)
             {
-                var pastIncidents = Memory.Episodic.Recall(queryEmbedding, topK: 1, minScore: 0.30f);
+                float epMinScore = 0.20f;
+                var pastIncidents = Memory.Episodic.Recall(queryEmbedding, topK: 1, minScore: epMinScore);
                 if (pastIncidents.Count > 0)
                 {
                     var ep = pastIncidents[0].Episode;
@@ -97,6 +98,11 @@ namespace ZeroAgent.Dialog.Engine
 
             // Step 6: Advance Dialogue State
             Dst.AdvanceSession(session, resolvedMessage, detectedIntent);
+
+            if (session.TryGetSlot("machine_id", out var currentMachineId))
+            {
+                workingMemory.SetSlot("machine_id", currentMachineId);
+            }
 
             // Step 7: Handle dialogue state outcomes
             if (session.State == SessionState.CollectingSlots && !string.IsNullOrEmpty(session.PendingRequiredSlot))

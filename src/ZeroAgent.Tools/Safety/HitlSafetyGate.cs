@@ -66,10 +66,25 @@ namespace ZeroAgent.Tools.Safety
         public IEnumerable<HitlApprovalRequest> PendingRequests => _pendingRequests.Values;
 
         /// <summary>
+        /// When true, immediately approves all sensitive tool calls without blocking for human input.
+        /// Useful for automated integration testing and headless environments.
+        /// </summary>
+        public bool AutoApprove { get; set; }
+
+        /// <summary>
         /// Asynchronously awaits operator approval or timeout for a sensitive tool call.
         /// </summary>
         public async Task<bool> InterceptAsync(AgentTool tool, string argument, TimeSpan? timeout = null)
         {
+            if (AutoApprove)
+            {
+                lock (_lock)
+                {
+                    _auditLog.Add(new HitlAuditRecord(Guid.NewGuid().ToString("N"), tool.Name, argument, true, "AutoApproved"));
+                }
+                return true;
+            }
+
             var req = new HitlApprovalRequest(tool.Name, argument);
             _pendingRequests[req.RequestId] = req;
 
