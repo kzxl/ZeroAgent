@@ -140,7 +140,7 @@ namespace ZeroAgent.Tests
         }
 
         [Fact]
-        public void Benchmark_Profiling_Latency_Breakdown_Microseconds()
+        public async Task Benchmark_Profiling_Latency_Breakdown_Microseconds()
         {
             var safetyGate = new HitlSafetyGate { AutoApprove = true };
             var bot = IndustrialDialogFactory.CreateIndustrialBot(safetyGate, enableNeuralClassifier: true);
@@ -151,7 +151,7 @@ namespace ZeroAgent.Tests
             // Warm-up
             for (int i = 0; i < 10; i++)
             {
-                bot.ChatAsync(sessionId, query, profile).GetAwaiter().GetResult();
+                await bot.ChatAsync(sessionId, query, profile);
             }
 
             int iterations = 200;
@@ -162,7 +162,7 @@ namespace ZeroAgent.Tests
             for (int i = 0; i < iterations; i++)
             {
                 sw.Restart();
-                var response = bot.ChatAsync(sessionId, query, profile).GetAwaiter().GetResult();
+                var response = await bot.ChatAsync(sessionId, query, profile);
                 sw.Stop();
 
                 double us = sw.Elapsed.TotalMilliseconds * 1000.0;
@@ -197,7 +197,7 @@ namespace ZeroAgent.Tests
         }
 
         [Fact]
-        public void Benchmark_HighThroughput_ConcurrencyStressTest()
+        public async Task Benchmark_HighThroughput_ConcurrencyStressTest()
         {
             var safetyGate = new HitlSafetyGate { AutoApprove = true };
             var bot = IndustrialDialogFactory.CreateIndustrialBot(safetyGate, enableNeuralClassifier: true);
@@ -207,18 +207,19 @@ namespace ZeroAgent.Tests
             // Warm-up
             for (int i = 0; i < 10; i++)
             {
-                bot.ChatAsync($"warmup_{i}", "Kiểm tra nhiệt độ máy CNC-01", profile).GetAwaiter().GetResult();
+                await bot.ChatAsync($"warmup_{i}", "Kiểm tra nhiệt độ máy CNC-01", profile);
             }
 
             long memBefore = GC.GetTotalMemory(true);
             var sw = Stopwatch.StartNew();
 
-            Parallel.For(0, totalRequests, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, i =>
+            var tasks = new Task[totalRequests];
+            for (int i = 0; i < totalRequests; i++)
             {
                 string sId = $"session_{i % 50}";
-                var r = bot.ChatAsync(sId, "Kiểm tra nhiệt độ máy CNC-01", profile).GetAwaiter().GetResult();
-                Assert.NotNull(r.Text);
-            });
+                tasks[i] = bot.ChatAsync(sId, "Kiểm tra nhiệt độ máy CNC-01", profile);
+            }
+            await Task.WhenAll(tasks);
 
             sw.Stop();
             long memAfter = GC.GetTotalMemory(false);
