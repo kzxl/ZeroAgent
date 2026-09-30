@@ -44,5 +44,100 @@ namespace ZeroAgent.Dialog.Generator
         {
             return $"⛔ Truy cập bị từ chối: Thao tác này yêu cầu quyền [{requiredPermission}]. Tài khoản hiện tại không có quyền can thiệp.";
         }
+
+        /// <summary>
+        /// Renders tabular data (headers and rows) into a clean GitHub Flavored Markdown table.
+        /// </summary>
+        public string FormatMarkdownTable(IReadOnlyList<string> headers, IReadOnlyList<IReadOnlyList<string>> rows)
+        {
+            if (headers == null || headers.Count == 0) return string.Empty;
+
+            var sb = new System.Text.StringBuilder();
+            // Header row
+            sb.Append("| ");
+            for (int i = 0; i < headers.Count; i++)
+            {
+                sb.Append(headers[i]).Append(" | ");
+            }
+            sb.AppendLine();
+
+            // Separator row
+            sb.Append("| ");
+            for (int i = 0; i < headers.Count; i++)
+            {
+                sb.Append("--- | ");
+            }
+            sb.AppendLine();
+
+            // Data rows
+            if (rows != null)
+            {
+                foreach (var row in rows)
+                {
+                    sb.Append("| ");
+                    for (int i = 0; i < headers.Count; i++)
+                    {
+                        string val = i < row.Count ? row[i] : string.Empty;
+                        sb.Append(val).Append(" | ");
+                    }
+                    sb.AppendLine();
+                }
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// Converts a JSON array of record objects into a readable Markdown table.
+        /// </summary>
+        public string TryFormatJsonAsTable(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json) || !json.TrimStart().StartsWith("["))
+                return json;
+
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+                    return json;
+
+                var array = doc.RootElement;
+                if (array.GetArrayLength() == 0) return "*(Bảng rỗng - Không có bản ghi nào)*";
+
+                var headers = new List<string>();
+                var first = array[0];
+                if (first.ValueKind != System.Text.Json.JsonValueKind.Object)
+                    return json;
+
+                foreach (var prop in first.EnumerateObject())
+                {
+                    headers.Add(prop.Name);
+                }
+
+                var rows = new List<IReadOnlyList<string>>();
+                foreach (var item in array.EnumerateArray())
+                {
+                    var row = new List<string>();
+                    foreach (var h in headers)
+                    {
+                        if (item.TryGetProperty(h, out var val))
+                        {
+                            row.Add(val.ToString());
+                        }
+                        else
+                        {
+                            row.Add(string.Empty);
+                        }
+                    }
+                    rows.Add(row);
+                }
+
+                return FormatMarkdownTable(headers, rows);
+            }
+            catch
+            {
+                return json;
+            }
+        }
     }
 }

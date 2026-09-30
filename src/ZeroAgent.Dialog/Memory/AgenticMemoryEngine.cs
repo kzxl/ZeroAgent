@@ -17,6 +17,7 @@ namespace ZeroAgent.Dialog.Memory
 
         public EpisodicMemory Episodic { get; }
         public SemanticMemory Semantic { get; }
+        public SemanticResponseCache ResponseCache { get; }
         public ProfileMemory Profiles { get; } = new ProfileMemory();
         public LexicalSemanticEmbedder Embedder { get; }
 
@@ -25,6 +26,7 @@ namespace ZeroAgent.Dialog.Memory
             Embedder = new LexicalSemanticEmbedder(dimension);
             Episodic = new EpisodicMemory(dimension);
             Semantic = new SemanticMemory(dimension);
+            ResponseCache = new SemanticResponseCache(dimension);
         }
 
         public WorkingMemory GetWorkingMemory(string sessionId)

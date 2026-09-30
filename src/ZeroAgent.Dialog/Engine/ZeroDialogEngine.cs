@@ -58,6 +58,20 @@ namespace ZeroAgent.Dialog.Engine
             // Step 2: Vector embedding
             var queryEmbedding = Memory.Embedder.Embed(resolvedMessage);
 
+            // Step 2.5: Check Semantic Response Cache (Short-circuit NLU/LLM if similarity >= 0.95 and session is idle/completed)
+            if (session.State == SessionState.Idle || session.State == SessionState.Completed)
+            {
+                if (Memory.ResponseCache.TryGet(queryEmbedding, resolvedMessage, minSimilarity: 0.95f, out var cachedEntry) && cachedEntry != null)
+                {
+                    workingMemory.AddTurn(userMessage, cachedEntry.ResponseText, cachedEntry.IntentName ?? "SEMANTIC_CACHE_HIT");
+                    return new DialogResponse(
+                        cachedEntry.ResponseText,
+                        SessionState.Completed,
+                        intentName: cachedEntry.IntentName ?? "SEMANTIC_CACHE_HIT",
+                        confidence: cachedEntry.Similarity);
+                }
+            }
+
             // Step 3: Check Semantic Memory (SOPs / FAQ manuals)
             bool isDocQuery = resolvedMessage.IndexOf("quy trình", StringComparison.OrdinalIgnoreCase) >= 0
                 || resolvedMessage.IndexOf("hướng dẫn", StringComparison.OrdinalIgnoreCase) >= 0
@@ -156,6 +170,13 @@ namespace ZeroAgent.Dialog.Engine
 
                 string finalResponse = Generator.FormatResponse(intent.ResponseTemplates, session.Slots, actionOutput);
                 workingMemory.AddTurn(userMessage, finalResponse, intent.Name);
+
+                // Populate semantic response cache for idempotent queries
+                if (intent.Name != null && !intent.Name.StartsWith("SET_", StringComparison.OrdinalIgnoreCase)
+                    && !intent.Name.StartsWith("WRITE_", StringComparison.OrdinalIgnoreCase))
+                {
+                    Memory.ResponseCache.Store(queryEmbedding, resolvedMessage, finalResponse, intent.Name);
+                }
 
                 session.State = SessionState.Completed;
                 return new DialogResponse(finalResponse, SessionState.Completed, intent.Name, session.Slots, true, score);
