@@ -7,6 +7,7 @@ namespace ZeroAgent.Dialog.DST
     public sealed class DialogueIntent
     {
         public string Name { get; }
+        public string Id => Name;
         public string Description { get; }
         public List<string> SampleUtterances { get; } = new List<string>();
         public List<string> RequiredSlots { get; } = new List<string>();

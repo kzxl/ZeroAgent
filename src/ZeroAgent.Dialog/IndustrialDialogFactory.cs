@@ -15,7 +15,7 @@ namespace ZeroAgent.Dialog
     /// </summary>
     public static class IndustrialDialogFactory
     {
-        public static ZeroDialogEngine CreateIndustrialBot(HitlSafetyGate? safetyGate = null)
+        public static ZeroDialogEngine CreateIndustrialBot(HitlSafetyGate? safetyGate = null, bool enableNeuralClassifier = true)
         {
             safetyGate ??= new HitlSafetyGate();
             var registry = new AgentToolRegistry();
@@ -77,6 +77,11 @@ namespace ZeroAgent.Dialog
             };
 
             engine.Dst.RegisterIntent(stopIntent);
+
+            if (enableNeuralClassifier)
+            {
+                engine.Dst.EnableNeuralClassifier(epochs: 60, learningRate: 0.05f);
+            }
 
             // 3. Seed Semantic Memory (SOP Standard Operating Procedures)
             string sop1Title = "Quy trình xử lý quá nhiệt Lò nung F-01";

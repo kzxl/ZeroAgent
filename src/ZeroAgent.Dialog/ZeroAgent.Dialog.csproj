@@ -30,5 +30,11 @@
 
     <ProjectReference Include="..\..\..\ZeroConcurrency\src\ZeroConcurrency\ZeroConcurrency.csproj" Condition="Exists('..\..\..\ZeroConcurrency\src\ZeroConcurrency\ZeroConcurrency.csproj')" />
     <PackageReference Include="ZeroConcurrency" Version="1.0.0" Condition="!Exists('..\..\..\ZeroConcurrency\src\ZeroConcurrency\ZeroConcurrency.csproj')" />
+
+    <ProjectReference Include="..\..\..\ZeroTensor\src\ZeroTensor.Core\ZeroTensor.Core.csproj" Condition="Exists('..\..\..\ZeroTensor\src\ZeroTensor.Core\ZeroTensor.Core.csproj')" />
+    <PackageReference Include="ZeroTensor.Core" Version="1.4.0" Condition="!Exists('..\..\..\ZeroTensor\src\ZeroTensor.Core\ZeroTensor.Core.csproj')" />
+
+    <ProjectReference Include="..\..\..\ZeroNeural\src\ZeroNeural.Core\ZeroNeural.Core.csproj" Condition="Exists('..\..\..\ZeroNeural\src\ZeroNeural.Core\ZeroNeural.Core.csproj')" />
+    <PackageReference Include="ZeroNeural.Core" Version="1.0.0" Condition="!Exists('..\..\..\ZeroNeural\src\ZeroNeural.Core\ZeroNeural.Core.csproj')" />
   </ItemGroup>
 </Project>
