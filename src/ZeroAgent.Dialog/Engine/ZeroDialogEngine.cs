@@ -113,9 +113,9 @@ namespace ZeroAgent.Dialog.Engine
             // Step 6: Advance Dialogue State
             Dst.AdvanceSession(session, resolvedMessage, detectedIntent);
 
-            if (session.TryGetSlot("machine_id", out var currentMachineId))
+            foreach (var kvp in session.Slots)
             {
-                workingMemory.SetSlot("machine_id", currentMachineId);
+                workingMemory.SetSlot(kvp.Key, kvp.Value);
             }
 
             // Step 7: Handle dialogue state outcomes
@@ -156,13 +156,9 @@ namespace ZeroAgent.Dialog.Engine
                 }
 
                 // Update Working Memory active entities
-                if (session.TryGetSlot("machine_id", out var machineId))
+                foreach (var kvp in session.Slots)
                 {
-                    workingMemory.SetSlot("machine_id", machineId);
-                }
-                if (session.TryGetSlot("metric", out var metric))
-                {
-                    workingMemory.SetSlot("metric", metric);
+                    workingMemory.SetSlot(kvp.Key, kvp.Value);
                 }
 
                 // Record successful action into slots for template rendering

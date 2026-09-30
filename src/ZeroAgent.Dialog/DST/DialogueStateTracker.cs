@@ -227,6 +227,13 @@ namespace ZeroAgent.Dialog.DST
             {
                 session.SetSlot("area", areaMatch.Value.ToLowerInvariant());
             }
+
+            // Table name pattern
+            var tableMatch = Regex.Match(text, @"\b(factory_machines|SampleData|production_lines|telemetry_logs)\b", RegexOptions.IgnoreCase);
+            if (tableMatch.Success)
+            {
+                session.SetSlot("tableName", tableMatch.Value);
+            }
         }
 
         private static string ExtractSlotValue(string text, string slotName)
@@ -238,6 +245,11 @@ namespace ZeroAgent.Dialog.DST
                 // Match words like "máy 1", "lò 2"
                 var mAlt = Regex.Match(text, @"(máy|lò|băng chuyền)\s*([a-zA-Z0-9_-]+)", RegexOptions.IgnoreCase);
                 if (mAlt.Success) return mAlt.Groups[2].Value.ToUpperInvariant();
+            }
+            else if (slotName.Equals("tableName", StringComparison.OrdinalIgnoreCase))
+            {
+                var m = Regex.Match(text, @"\b(factory_machines|SampleData|production_lines|telemetry_logs|[a-zA-Z0-9_]+)\b", RegexOptions.IgnoreCase);
+                if (m.Success) return m.Value;
             }
             return string.Empty;
         }

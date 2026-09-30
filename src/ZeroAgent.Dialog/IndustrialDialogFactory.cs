@@ -95,7 +95,12 @@ namespace ZeroAgent.Dialog
 
             dbQueryIntent.ActionHandler = async session =>
             {
-                return await registry.ExecuteAsync("db_query_table", "{\"tableName\":\"factory_machines\",\"limit\":5}").ConfigureAwait(false);
+                if (!session.TryGetSlot("tableName", out var tbl) || string.IsNullOrEmpty(tbl))
+                {
+                    tbl = "factory_machines";
+                    session.SetSlot("tableName", tbl);
+                }
+                return await registry.ExecuteAsync("db_query_table", $"{{\"tableName\":\"{tbl}\",\"limit\":5}}").ConfigureAwait(false);
             };
 
             engine.Dst.RegisterIntent(dbQueryIntent);

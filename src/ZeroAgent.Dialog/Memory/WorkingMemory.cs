@@ -57,7 +57,11 @@ namespace ZeroAgent.Dialog.Memory
             _activeSlots[key] = value;
 
             if (key.Equals("machine_id", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("target", StringComparison.OrdinalIgnoreCase))
+                key.Equals("target", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("tableName", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("product", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("product_code", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("entity", StringComparison.OrdinalIgnoreCase))
             {
                 CurrentSubject = value;
             }
@@ -86,7 +90,7 @@ namespace ZeroAgent.Dialog.Memory
 
         /// <summary>
         /// Resolves anaphora, pronouns, and implicit subject references based on active working memory.
-        /// Replaces 'nó', 'máy đó', 'con đó', 'it', 'that machine' with the active subject name.
+        /// Replaces 'nó', 'máy đó', 'con đó', 'it', 'that machine', 'bảng đó', 'sản phẩm đó' with the active subject name.
         /// </summary>
         public string ResolveAnaphora(string rawInput)
         {
@@ -96,10 +100,10 @@ namespace ZeroAgent.Dialog.Memory
             string text = rawInput;
 
             // Vietnamese pronouns and anaphoric references
-            text = Regex.Replace(text, @"\b(nó|máy đó|con đó|máy này|thiết bị đó|thiết bị này)\b", CurrentSubject, RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"\b(nó|máy đó|con đó|máy này|thiết bị đó|thiết bị này|bảng đó|bảng này|sản phẩm đó|món đó|cái đó)\b", CurrentSubject, RegexOptions.IgnoreCase);
 
             // English pronouns
-            text = Regex.Replace(text, @"\b(it|that machine|this machine|that device)\b", CurrentSubject, RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"\b(it|that machine|this machine|that device|that table|that product)\b", CurrentSubject, RegexOptions.IgnoreCase);
 
             // Elliptical follow-up questions: "còn áp suất thì sao" -> "kiểm tra áp suất của CNC-01"
             var ellipticalMatch = Regex.Match(text, @"^còn\s+([a-zA-Z0-9_\u00C0-\u024F\u1E00-\u1EFF\s]+)\s+(thì sao|thế nào)\??$", RegexOptions.IgnoreCase);
