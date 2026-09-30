@@ -78,7 +78,7 @@ namespace ZeroAgent.Dialog.DST
                     // Gatekeeper against closed-world Softmax overconfidence:
                     // Verify the query actually has positive semantic proximity to the intent's sample utterances.
                     float maxSampleSim = GetMaxSampleSimilarity(queryEmbedding, neuralIntent);
-                    if (maxSampleSim >= 0.25f)
+                    if (maxSampleSim >= 0.30f)
                     {
                         return (neuralIntent, confidence);
                     }
@@ -109,6 +109,11 @@ namespace ZeroAgent.Dialog.DST
                     maxScore = sim;
                     bestIntent = item.Intent;
                 }
+            }
+
+            if (maxScore < 0.25f)
+            {
+                return (null, maxScore);
             }
 
             return (bestIntent, maxScore);
@@ -159,6 +164,10 @@ namespace ZeroAgent.Dialog.DST
             if (detectedIntent != null && (session.CurrentIntent == null || session.State == SessionState.Completed || session.State == SessionState.Idle))
             {
                 session.CurrentIntent = detectedIntent;
+            }
+            else if (detectedIntent == null && (session.State == SessionState.Completed || session.State == SessionState.Idle))
+            {
+                session.CurrentIntent = null;
             }
 
             // 3. Extract common entity slots from resolved text

@@ -59,6 +59,7 @@ namespace ZeroAgent.Core.Tools
         public bool Success { get; set; }
         public string Content { get; set; }
         public string? Error { get; set; }
+        public string? ErrorMessage => Error;
         public TimeSpan Duration { get; set; }
 
         public ToolCallResponse()

@@ -12,11 +12,11 @@ namespace ZeroAgent.Core.Tools
     {
         private sealed class ToolDescriptor
         {
-            public AgentTool Tool { get; }
+            public IAgentTool Tool { get; }
             public HashSet<string> Keywords { get; }
             public string NormalizedDescription { get; }
 
-            public ToolDescriptor(AgentTool tool, IEnumerable<string>? triggers)
+            public ToolDescriptor(IAgentTool tool, IEnumerable<string>? triggers)
             {
                 Tool = tool;
                 Keywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -47,7 +47,7 @@ namespace ZeroAgent.Core.Tools
 
         public int Count => _descriptors.Count;
 
-        public void RegisterTool(AgentTool tool, IEnumerable<string>? triggers = null)
+        public void RegisterTool(IAgentTool tool, IEnumerable<string>? triggers = null)
         {
             if (tool == null) throw new ArgumentNullException(nameof(tool));
             _descriptors.Add(new ToolDescriptor(tool, triggers));
@@ -66,15 +66,15 @@ namespace ZeroAgent.Core.Tools
         /// Scores and retrieves the top-K most relevant tools for a given user utterance or query.
         /// Evaluates in less than 20 microseconds.
         /// </summary>
-        public List<(AgentTool Tool, float Score)> Route(string userQuery, int topK = 3, float minScore = 0.2f)
+        public List<(IAgentTool Tool, float Score)> Route(string userQuery, int topK = 3, float minScore = 0.2f)
         {
             if (string.IsNullOrWhiteSpace(userQuery) || _descriptors.Count == 0)
-                return new List<(AgentTool, float)>();
+                return new List<(IAgentTool, float)>();
 
             string lower = userQuery.ToLowerInvariant();
             var queryTokens = lower.Split(new[] { ' ', ',', '.', '?', '!', ':', ';', '(', ')', '"', '\'', '-', '_' }, StringSplitOptions.RemoveEmptyEntries);
 
-            var scored = new List<(AgentTool Tool, float Score)>(_descriptors.Count);
+            var scored = new List<(IAgentTool Tool, float Score)>(_descriptors.Count);
 
             foreach (var desc in _descriptors)
             {

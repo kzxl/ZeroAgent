@@ -51,6 +51,41 @@ namespace ZeroAgent.Dialog.Memory
             }
         }
 
+        /// <summary>
+        /// Applies Knapsack token budgeting to truncate history to fit within a model's context window.
+        /// Preserves the most recent turns and essential state, discarding older turns when the estimated token count exceeds the budget.
+        /// </summary>
+        public int PruneToTokenBudget(int maxTokens, Func<string, int>? tokenEstimator = null)
+        {
+            if (maxTokens <= 0 || _turns.Count <= 1) return 0;
+
+            tokenEstimator ??= DefaultTokenEstimator;
+
+            int totalTokens = 0;
+            for (int i = 0; i < _turns.Count; i++)
+            {
+                totalTokens += tokenEstimator(_turns[i].UserMessage) + tokenEstimator(_turns[i].BotResponse);
+            }
+
+            int pruned = 0;
+            while (totalTokens > maxTokens && _turns.Count > 1)
+            {
+                var removed = _turns[0];
+                _turns.RemoveAt(0);
+                totalTokens -= (tokenEstimator(removed.UserMessage) + tokenEstimator(removed.BotResponse));
+                pruned++;
+            }
+
+            return pruned;
+        }
+
+        private static int DefaultTokenEstimator(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            // Fast heuristic for Vietnamese and English: ~3.5 chars per token
+            return Math.Max(1, (text.Length + 2) / 3);
+        }
+
         public void SetSlot(string key, string value)
         {
             if (string.IsNullOrEmpty(key)) return;

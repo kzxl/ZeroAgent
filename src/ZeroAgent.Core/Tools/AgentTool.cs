@@ -8,7 +8,7 @@ namespace ZeroAgent.Core.Tools
     /// Represents an invokable tool binding available to the AI agent.
     /// Supports parameter schema constraints (ZeroPrompt PDA) and Human-in-the-Loop (HITL) safety policies.
     /// </summary>
-    public sealed class AgentTool
+    public sealed class AgentTool : IAgentTool
     {
         public string Name { get; }
         public string Description { get; }
@@ -60,6 +60,24 @@ namespace ZeroAgent.Core.Tools
             catch (Exception ex)
             {
                 return $"Tool execution failed with error: {ex.Message}";
+            }
+        }
+
+        public async Task<ToolCallResponse> ExecuteCallAsync(ToolCallRequest request)
+        {
+            if (request == null) throw new ArgumentNullException(nameof(request));
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                string result = await ExecuteAsync(request.ArgumentsJson).ConfigureAwait(false);
+                sw.Stop();
+                return ToolCallResponse.CreateSuccess(request.CallId, Name, result, sw.Elapsed);
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                return ToolCallResponse.CreateFailure(request.CallId, Name, ex.Message, sw.Elapsed);
             }
         }
     }

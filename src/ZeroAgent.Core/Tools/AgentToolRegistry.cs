@@ -13,19 +13,19 @@ namespace ZeroAgent.Core.Tools
     /// </summary>
     public sealed class AgentToolRegistry
     {
-        private readonly Dictionary<string, AgentTool> _tools = new Dictionary<string, AgentTool>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, IAgentTool> _tools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Global or context-specific Human-in-the-Loop approval callback.
-        /// Invoked when a tool with <see cref="AgentTool.RequiresApproval"/> is executed.
+        /// Invoked when a tool with <see cref="IAgentTool.RequiresApproval"/> is executed.
         /// Return true to allow execution, or false to reject.
         /// </summary>
-        public Func<AgentTool, string, Task<bool>>? ApprovalHandler { get; set; }
+        public Func<IAgentTool, string, Task<bool>>? ApprovalHandler { get; set; }
 
         public int Count => _tools.Count;
-        public IEnumerable<AgentTool> Tools => _tools.Values;
+        public IEnumerable<IAgentTool> Tools => _tools.Values;
 
-        public void Register(AgentTool tool)
+        public void Register(IAgentTool tool)
         {
             if (tool == null) throw new ArgumentNullException(nameof(tool));
             _tools[tool.Name] = tool;
@@ -50,12 +50,28 @@ namespace ZeroAgent.Core.Tools
             }));
         }
 
-        public bool TryGetTool(string name, out AgentTool tool)
+        public bool TryGetTool(string name, out IAgentTool tool)
         {
             return _tools.TryGetValue(name, out tool!);
         }
 
+        public bool TryGetTool<T>(string name, out T tool) where T : class, IAgentTool
+        {
+            if (_tools.TryGetValue(name, out var t) && t is T typed)
+            {
+                tool = typed;
+                return true;
+            }
+            tool = null!;
+            return false;
+        }
+
         public AgentTool? Get(string name)
+        {
+            return _tools.TryGetValue(name, out var tool) ? (tool as AgentTool) : null;
+        }
+
+        public IAgentTool? Find(string name)
         {
             return _tools.TryGetValue(name, out var tool) ? tool : null;
         }
@@ -115,17 +131,7 @@ namespace ZeroAgent.Core.Tools
                 }
             }
 
-            try
-            {
-                string result = await tool.ExecuteAsync(request.ArgumentsJson).ConfigureAwait(false);
-                sw.Stop();
-                return ToolCallResponse.CreateSuccess(request.CallId, request.ToolName, result, sw.Elapsed);
-            }
-            catch (Exception ex)
-            {
-                sw.Stop();
-                return ToolCallResponse.CreateFailure(request.CallId, request.ToolName, ex.Message, sw.Elapsed);
-            }
+            return await tool.ExecuteCallAsync(request).ConfigureAwait(false);
         }
 
         /// <summary>

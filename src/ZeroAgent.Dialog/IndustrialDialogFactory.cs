@@ -17,11 +17,23 @@ namespace ZeroAgent.Dialog
     {
         public static ZeroDialogEngine CreateIndustrialBot(HitlSafetyGate? safetyGate = null, bool enableNeuralClassifier = true)
         {
-            safetyGate ??= new HitlSafetyGate();
-            var registry = new AgentToolRegistry();
-            registry.RegisterIndustrialToolkit(safetyGate);
+            return CreateIndustrialBot(safetyGate, registry: null, enableNeuralClassifier: enableNeuralClassifier);
+        }
 
-            var engine = new ZeroDialogEngine(registry, safetyGate);
+        public static ZeroDialogEngine CreateIndustrialBot(
+            HitlSafetyGate? safetyGate,
+            AgentToolRegistry? registry,
+            bool enableNeuralClassifier = true,
+            int dimension = 128)
+        {
+            safetyGate ??= new HitlSafetyGate();
+            if (registry == null)
+            {
+                registry = new AgentToolRegistry();
+                registry.RegisterIndustrialToolkit(safetyGate);
+            }
+
+            var engine = new ZeroDialogEngine(registry, safetyGate, dimension);
 
             // 1. Intent: CHECK_TEMPERATURE
             var tempIntent = new DialogueIntent("CHECK_TEMPERATURE", "Kiểm tra nhiệt độ cảm biến thiết bị")
@@ -62,6 +74,10 @@ namespace ZeroAgent.Dialog
                     "ngắt điện",
                     "dừng khẩn cấp",
                     "dừng nó lại",
+                    "dừng lại",
+                    "dừng",
+                    "dừng ngay",
+                    "dừng hoạt động",
                     "stop machine")
                 .RequireSlot("machine_id", "Bạn muốn yêu cầu dừng thiết bị nào?")
                 .AddTemplates(

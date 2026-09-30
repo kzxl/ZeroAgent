@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ZeroAgent.Core.Context;
 using ZeroAgent.Core.Tools;
+using ZeroPrompt.Core.Caching;
 
 namespace ZeroAgent.Core.Engine
 {
@@ -15,9 +16,6 @@ namespace ZeroAgent.Core.Engine
     /// </summary>
     public sealed class ReActAgent
     {
-        private static readonly Regex ActionRegex = new Regex(@"Action:\s*([A-Za-z0-9_]+)\s*\((.*)\)", RegexOptions.Compiled);
-        private static readonly Regex FinalAnswerRegex = new Regex(@"Final Answer:\s*(.*)", RegexOptions.Compiled | RegexOptions.Singleline);
-
         public string Name { get; }
         public string Role { get; }
         public AgentToolRegistry Tools { get; }
@@ -54,29 +52,18 @@ namespace ZeroAgent.Core.Engine
                 context.AddMessage(AgentRole.Assistant, completion);
 
                 // 3. Check for Final Answer
-                var finalMatch = FinalAnswerRegex.Match(completion);
-                if (finalMatch.Success)
+                if (ToolCallParser.TryParseFinalAnswer(completion, out string answer))
                 {
-                    string answer = finalMatch.Groups[1].Value.Trim();
                     sw.Stop();
                     return AgentResponse.Succeeded(answer, currentStep, sw.Elapsed, context.History);
                 }
 
-                // 4. Check for Action
-                var actionMatch = ActionRegex.Match(completion);
-                if (actionMatch.Success)
+                // 4. Check for Action (supports ReAct syntax, JSON objects, and markdown codeblocks)
+                if (ToolCallParser.TryParseToolCall(completion, out var toolCall))
                 {
-                    string toolName = actionMatch.Groups[1].Value.Trim();
-                    string argument = actionMatch.Groups[2].Value.Trim();
-
-                    // Strip any surrounding quotes from argument
-                    if (argument.StartsWith("\"") && argument.EndsWith("\"") && argument.Length >= 2)
-                    {
-                        argument = argument.Substring(1, argument.Length - 2);
-                    }
-
-                    string observation = await Tools.ExecuteAsync(toolName, argument).ConfigureAwait(false);
-                    context.AddMessage(AgentRole.Tool, observation, toolName);
+                    var response = await Tools.ExecuteCallAsync(toolCall).ConfigureAwait(false);
+                    string observation = response.Success ? response.Content : $"Error: {response.ErrorMessage}";
+                    context.AddMessage(AgentRole.Tool, observation, toolCall.ToolName);
 
                     conversation.AppendLine(completion);
                     conversation.AppendLine($"Observation: {observation}");
@@ -95,27 +82,35 @@ namespace ZeroAgent.Core.Engine
 
         private string BuildPrompt(string goal, string trajectory)
         {
-            var sb = new StringBuilder();
-            sb.AppendLine($"You are {Name}, an autonomous cognitive agent acting as a {Role}.");
-            sb.AppendLine("Use the following format:");
-            sb.AppendLine("Goal: the user prompt to accomplish");
-            sb.AppendLine("Thought: you should always think about what to do");
-            sb.AppendLine("Action: the action to take, should be one of the tools: ToolName(argument)");
-            sb.AppendLine("Observation: the result of the action");
-            sb.AppendLine("... (this Thought/Action/Observation can repeat)");
-            sb.AppendLine("Thought: I now have the final answer");
-            sb.AppendLine("Final Answer: the final answer to the original input question");
-            sb.AppendLine();
-            sb.AppendLine(Tools.GetToolsPrompt());
-            sb.AppendLine();
-            sb.AppendLine("Begin!");
-            sb.AppendLine($"Goal: {goal}");
+            var optimizer = new PromptLayoutOptimizer();
+
+            // 1. Static System Instruction
+            string systemInstruction = $"You are {Name}, an autonomous cognitive agent acting as a {Role}.\n" +
+                "Use the following format:\n" +
+                "Goal: the user prompt to accomplish\n" +
+                "Thought: you should always think about what to do\n" +
+                "Action: the action to take, should be one of the tools: ToolName(argument)\n" +
+                "Observation: the result of the action\n" +
+                "... (this Thought/Action/Observation can repeat)\n" +
+                "Thought: I now have the final answer\n" +
+                "Final Answer: the final answer to the original input question";
+
+            optimizer.AddSystem(systemInstruction, "react_system_instruction");
+
+            // 2. Static Tool Definitions
+            optimizer.AddTools(Tools.GetToolsPrompt(), "react_tool_definitions");
+
+            // 3. User Goal
+            optimizer.AddUserQuery($"Begin!\nGoal: {goal}", "react_goal");
+
+            // 4. Dynamic Trajectory
             if (!string.IsNullOrWhiteSpace(trajectory))
             {
-                sb.AppendLine(trajectory);
+                optimizer.AddHistory(trajectory, "react_trajectory");
             }
-            sb.Append("Thought: ");
-            return sb.ToString();
+
+            var layout = optimizer.Optimize();
+            return layout.FullPrompt + "\nThought: ";
         }
     }
 }

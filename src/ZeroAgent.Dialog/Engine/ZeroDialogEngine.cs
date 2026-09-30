@@ -25,6 +25,18 @@ namespace ZeroAgent.Dialog.Engine
         public DialogueResponseGenerator Generator { get; } = new DialogueResponseGenerator();
         public HitlSafetyGate? SafetyGate { get; }
 
+        /// <summary>
+        /// Two-Tier cognitive escalation handler.
+        /// Invoked when Reflex NLU confidence is low (< 0.45) or intent is unresolved, delegating to ReAct deliberation.
+        /// </summary>
+        public Func<DialogueSession, WorkingMemory, UserProfile, string, Task<DialogResponse?>>? CognitiveEscalationHandler { get; set; }
+
+        public void SetCognitiveEscalationBridge(CognitiveEscalationBridge bridge)
+        {
+            if (bridge == null) throw new ArgumentNullException(nameof(bridge));
+            CognitiveEscalationHandler = bridge.EscalateAsync;
+        }
+
         public ZeroDialogEngine(AgentToolRegistry? tools = null, HitlSafetyGate? safetyGate = null, int dimension = 128)
         {
             Tools = tools ?? new AgentToolRegistry();
@@ -107,8 +119,32 @@ namespace ZeroAgent.Dialog.Engine
                 }
             }
 
+            // Step 4.5: Explicit Analytical Deliberation (Escalation to Tier 2 ReAct when analytical reasoning requested)
+            bool isAnalyticalDeliberation =
+                resolvedMessage.IndexOf("phân tích", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("tại sao", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("nguyên nhân", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("đối chiếu", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("tổng hợp", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("analyze", StringComparison.OrdinalIgnoreCase) >= 0
+                || resolvedMessage.IndexOf("explain", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            if (isAnalyticalDeliberation && CognitiveEscalationHandler != null)
+            {
+                var escalated = await CognitiveEscalationHandler(session, workingMemory, profile, resolvedMessage).ConfigureAwait(false);
+                if (escalated != null)
+                {
+                    workingMemory.AddTurn(userMessage, escalated.Text, escalated.IntentName ?? "COGNITIVE_DELIBERATION_REACT");
+                    return escalated;
+                }
+            }
+
             // Step 5: Intent Recognition
             var (detectedIntent, score) = Dst.MatchIntent(queryEmbedding, resolvedMessage);
+            if (score < 0.25f)
+            {
+                detectedIntent = null;
+            }
 
             // Step 6: Advance Dialogue State
             Dst.AdvanceSession(session, resolvedMessage, detectedIntent);
@@ -167,9 +203,12 @@ namespace ZeroAgent.Dialog.Engine
                 string finalResponse = Generator.FormatResponse(intent.ResponseTemplates, session.Slots, actionOutput);
                 workingMemory.AddTurn(userMessage, finalResponse, intent.Name);
 
-                // Populate semantic response cache for idempotent queries
-                if (intent.Name != null && !intent.Name.StartsWith("SET_", StringComparison.OrdinalIgnoreCase)
-                    && !intent.Name.StartsWith("WRITE_", StringComparison.OrdinalIgnoreCase))
+                // Populate semantic response cache for idempotent queries (do NOT cache state-mutating actions)
+                if (intent.Name != null
+                    && !intent.Name.StartsWith("SET_", StringComparison.OrdinalIgnoreCase)
+                    && !intent.Name.StartsWith("WRITE_", StringComparison.OrdinalIgnoreCase)
+                    && !intent.Name.StartsWith("STOP_", StringComparison.OrdinalIgnoreCase)
+                    && !intent.Name.Contains("EMERGENCY"))
                 {
                     Memory.ResponseCache.Store(queryEmbedding, resolvedMessage, finalResponse, intent.Name);
                 }
@@ -178,7 +217,18 @@ namespace ZeroAgent.Dialog.Engine
                 return new DialogResponse(finalResponse, SessionState.Completed, intent.Name, session.Slots, true, score);
             }
 
-            // Fallback
+            // Step 8: Cognitive Escalation Bridge (Two-Tier Deliberation)
+            if (CognitiveEscalationHandler != null)
+            {
+                var escalated = await CognitiveEscalationHandler(session, workingMemory, profile, resolvedMessage).ConfigureAwait(false);
+                if (escalated != null)
+                {
+                    workingMemory.AddTurn(userMessage, escalated.Text, escalated.IntentName ?? "COGNITIVE_DELIBERATION_REACT");
+                    return escalated;
+                }
+            }
+
+            // Step 9: Fallback
             string fallback = "Xin lỗi, tôi chưa hiểu rõ yêu cầu. Bạn có thể hỏi về nhiệt độ, áp suất máy, kiểm tra PLC, hoặc tra cứu quy trình sự cố.";
             workingMemory.AddTurn(userMessage, fallback, "FALLBACK");
             return new DialogResponse(fallback, SessionState.Idle, null, session.Slots, false, 0.0f);

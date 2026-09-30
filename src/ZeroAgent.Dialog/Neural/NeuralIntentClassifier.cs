@@ -18,6 +18,7 @@ namespace ZeroAgent.Dialog.Neural
     {
         private readonly LexicalSemanticEmbedder _embedder;
         private readonly List<DialogueIntent> _intents = new List<DialogueIntent>();
+        private readonly object _inferenceLock = new object();
         private Sequential? _model;
         private bool _isTrained;
 
@@ -123,7 +124,11 @@ namespace ZeroAgent.Dialog.Neural
             var xTensor = Tensor.FromArray(sample, 1, 128);
             var xVar = new Variable(xTensor, requiresGrad: false);
 
-            var logits = _model.Forward(xVar);
+            Variable logits;
+            lock (_inferenceLock)
+            {
+                logits = _model.Forward(xVar);
+            }
 
             int numClasses = _intents.Count;
             float maxLogit = float.NegativeInfinity;

@@ -74,7 +74,7 @@ namespace ZeroAgent.Tools.Safety
         /// <summary>
         /// Asynchronously awaits operator approval or timeout for a sensitive tool call.
         /// </summary>
-        public async Task<bool> InterceptAsync(AgentTool tool, string argument, TimeSpan? timeout = null)
+        public async Task<bool> InterceptAsync(IAgentTool tool, string argument, TimeSpan? timeout = null)
         {
             if (AutoApprove)
             {
