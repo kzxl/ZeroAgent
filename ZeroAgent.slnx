@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ZeroAgent.Core/ZeroAgent.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ZeroAgent.Tests/ZeroAgent.Tests.csproj" />
+  </Folder>
+</Solution>
