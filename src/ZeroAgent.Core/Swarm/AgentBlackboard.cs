@@ -34,17 +34,27 @@ namespace ZeroAgent.Core.Swarm
         private readonly ConcurrentDictionary<string, object> _data = new ConcurrentDictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentQueue<BlackboardLogEntry> _logs = new ConcurrentQueue<BlackboardLogEntry>();
 
+        public int Count => _data.Count;
         public int StateCount => _data.Count;
         public int LogCount => _logs.Count;
 
         /// <summary>
-        /// Sets a shared state key-value pair on the blackboard.
+        /// Sets a shared state key-value pair on the blackboard with optional audit logging.
         /// </summary>
-        public void Set<T>(string key, T value)
+        public void Set<T>(string key, T value, string? agentName = null)
         {
             if (string.IsNullOrWhiteSpace(key)) throw new ArgumentNullException(nameof(key));
             _data[key.Trim()] = value!;
+            if (!string.IsNullOrEmpty(agentName))
+            {
+                PostFinding(agentName!, $"Updated '{key.Trim()}'");
+            }
         }
+
+        /// <summary>
+        /// Checks if a shared state variable exists on the blackboard.
+        /// </summary>
+        public bool ContainsKey(string key) => !string.IsNullOrWhiteSpace(key) && _data.ContainsKey(key.Trim());
 
         /// <summary>
         /// Attempts to retrieve a shared state value by key.

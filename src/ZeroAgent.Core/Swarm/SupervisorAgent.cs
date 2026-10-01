@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ZeroAgent.Core.Context;
 using ZeroAgent.Core.Engine;
+using ZeroAgent.Core.Swarm.Dag;
 
 namespace ZeroAgent.Core.Swarm
 {
@@ -21,6 +22,8 @@ namespace ZeroAgent.Core.Swarm
         public string Role { get; }
         public AgentSwarm Swarm { get; }
         public ILlmClient Llm { get; }
+        public DynamicDagExecutionEngine DagEngine { get; set; } = new DynamicDagExecutionEngine();
+        public bool UseDagPlanning { get; set; } = true;
 
         public SupervisorAgent(string name, string role, AgentSwarm swarm, ILlmClient llm)
         {
@@ -32,13 +35,17 @@ namespace ZeroAgent.Core.Swarm
 
         public readonly struct SubTaskAssignment
         {
+            public string Id { get; }
             public string AgentName { get; }
             public string SubGoal { get; }
+            public IReadOnlyList<string> Dependencies { get; }
 
-            public SubTaskAssignment(string agentName, string subGoal)
+            public SubTaskAssignment(string agentName, string subGoal, string? id = null, IEnumerable<string>? dependencies = null)
             {
                 AgentName = agentName;
                 SubGoal = subGoal;
+                Id = id ?? string.Empty;
+                Dependencies = dependencies != null ? new List<string>(dependencies) : (IReadOnlyList<string>)Array.Empty<string>();
             }
         }
 
@@ -74,22 +81,39 @@ namespace ZeroAgent.Core.Swarm
             var findings = new List<string>();
             int totalSteps = 0;
 
-            foreach (var task in assignments)
+            if (UseDagPlanning)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var subContext = new AgentContext(task.SubGoal, maxSteps: 6);
-                var subResponse = await Swarm.DelegateAsync(task.AgentName, subContext, cancellationToken).ConfigureAwait(false);
-
-                totalSteps += subResponse.TotalSteps;
-
-                if (subResponse.Success)
+                var dag = new TaskDag();
+                for (int i = 0; i < assignments.Count; i++)
                 {
-                    findings.Add($"[{task.AgentName}] Sub-task '{task.SubGoal}': {subResponse.Output}");
+                    var task = assignments[i];
+                    string taskId = !string.IsNullOrEmpty(task.Id) ? task.Id : $"T{i + 1}";
+                    dag.AddNode(new DagTaskNode(taskId, task.AgentName, task.SubGoal, task.Dependencies));
                 }
-                else
+
+                var dagResult = await DagEngine.ExecuteAsync(dag, Swarm, cancellationToken).ConfigureAwait(false);
+                findings.AddRange(dagResult.Findings);
+                totalSteps = dagResult.TotalSteps;
+            }
+            else
+            {
+                foreach (var task in assignments)
                 {
-                    findings.Add($"[{task.AgentName}] Sub-task '{task.SubGoal}' (Error): {subResponse.ErrorMessage}");
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var subContext = new AgentContext(task.SubGoal, maxSteps: 6);
+                    var subResponse = await Swarm.DelegateAsync(task.AgentName, subContext, cancellationToken).ConfigureAwait(false);
+
+                    totalSteps += subResponse.TotalSteps;
+
+                    if (subResponse.Success)
+                    {
+                        findings.Add($"[{task.AgentName}] Sub-task '{task.SubGoal}': {subResponse.Output}");
+                    }
+                    else
+                    {
+                        findings.Add($"[{task.AgentName}] Sub-task '{task.SubGoal}' (Error): {subResponse.ErrorMessage}");
+                    }
                 }
             }
 
@@ -115,8 +139,10 @@ namespace ZeroAgent.Core.Swarm
                 sb.AppendLine($"- {agent.Name} (Role: {agent.Role}, Tools: {agent.Tools.Count})");
             }
             sb.AppendLine();
-            sb.AppendLine("Respond with assignments using the exact line format:");
-            sb.AppendLine("Delegate: [AgentName] | Task: <clear subtask instruction>");
+            sb.AppendLine("Respond with assignments using the line format:");
+            sb.AppendLine("Delegate: [AgentName] | Id: T1 | DependsOn: [] | Task: <clear subtask instruction>");
+            sb.AppendLine("Delegate: [AgentName] | Id: T2 | DependsOn: [T1] | Task: <clear subtask instruction>");
+            sb.AppendLine("(Or simpler: Delegate: [AgentName] | Task: <clear subtask instruction>)");
 
             string planningOutput = await Llm.CompleteAsync(sb.ToString(), cancellationToken).ConfigureAwait(false);
 
@@ -128,15 +154,28 @@ namespace ZeroAgent.Core.Swarm
             var list = new List<SubTaskAssignment>();
             if (string.IsNullOrWhiteSpace(planningText)) return list;
 
-            var matches = Regex.Matches(planningText, @"Delegate:\s*\[?([a-zA-Z0-9_\-]+)\]?\s*\|\s*Task:\s*([^\r\n]+)", RegexOptions.IgnoreCase);
+            var matches = Regex.Matches(planningText, @"Delegate:\s*\[?([a-zA-Z0-9_\-]+)\]?\s*\|\s*(?:Id:\s*\[?([a-zA-Z0-9_\-]+)\]?\s*\|\s*)?(?:DependsOn:\s*\[([^\]]*)\]\s*\|\s*)?Task:\s*([^\r\n]+)", RegexOptions.IgnoreCase);
             foreach (Match m in matches)
             {
                 string agentName = m.Groups[1].Value.Trim();
-                string subGoal = m.Groups[2].Value.Trim();
+                string rawId = m.Groups[2].Success && !string.IsNullOrWhiteSpace(m.Groups[2].Value) ? m.Groups[2].Value.Trim() : $"T{list.Count + 1}";
+                string rawDeps = m.Groups[3].Success ? m.Groups[3].Value.Trim() : string.Empty;
+                string subGoal = m.Groups[4].Value.Trim();
+
+                var deps = new List<string>();
+                if (!string.IsNullOrEmpty(rawDeps))
+                {
+                    var split = rawDeps.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var s in split)
+                    {
+                        string trimmed = s.Trim().Trim('[', ']');
+                        if (!string.IsNullOrEmpty(trimmed)) deps.Add(trimmed);
+                    }
+                }
 
                 if (Swarm.FindAgent(agentName) != null && !string.IsNullOrEmpty(subGoal))
                 {
-                    list.Add(new SubTaskAssignment(agentName, subGoal));
+                    list.Add(new SubTaskAssignment(agentName, subGoal, rawId, deps));
                 }
             }
 
