@@ -6,6 +6,7 @@ namespace ZeroAgent.Dialog.Memory
 {
     public enum UserRole
     {
+        Guest,
         Operator,
         Technician,
         Engineer,
@@ -18,9 +19,11 @@ namespace ZeroAgent.Dialog.Memory
         public string UserId { get; }
         public string Name { get; }
         public UserRole Role { get; }
+        public bool IsGuest => Role == UserRole.Guest;
         public HashSet<string> Permissions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public List<string> AssignedAreas { get; } = new List<string>();
         public UserPersona Persona { get; } = new UserPersona();
+        public DateTime CreatedAtUtc { get; } = DateTime.UtcNow;
 
         public UserProfile(string userId, string name, UserRole role)
         {
@@ -31,6 +34,12 @@ namespace ZeroAgent.Dialog.Memory
             // Default role permissions
             switch (role)
             {
+                case UserRole.Guest:
+                    Permissions.Add("PUBLIC_INFO");
+                    Permissions.Add("GUEST_FAQ");
+                    Permissions.Add("PRODUCT_CATALOG");
+                    Permissions.Add("COMPANY_INFO");
+                    break;
                 case UserRole.Operator:
                     Permissions.Add("READ_STATUS");
                     Permissions.Add("QUERY_TELEMETRY");
@@ -55,6 +64,14 @@ namespace ZeroAgent.Dialog.Memory
             }
         }
 
+        public static UserProfile CreateGuest(string? guestSessionId = null, string name = "Khách")
+        {
+            string id = string.IsNullOrWhiteSpace(guestSessionId)
+                ? $"guest_{Guid.NewGuid():N}"
+                : (guestSessionId!.StartsWith("guest_", StringComparison.OrdinalIgnoreCase) ? guestSessionId : $"guest_{guestSessionId}");
+            return new UserProfile(id, name, UserRole.Guest);
+        }
+
         public bool CanExecute(string actionPermission)
         {
             if (string.IsNullOrEmpty(actionPermission)) return true;
@@ -65,7 +82,7 @@ namespace ZeroAgent.Dialog.Memory
 
     /// <summary>
     /// Profile Memory (User & Role Context Memory).
-    /// Enforces Role-Based Access Control (RBAC) and safety boundaries for conversational actions.
+    /// Enforces Role-Based Access Control (RBAC), guest isolation, and safety boundaries for conversational actions.
     /// </summary>
     public sealed class ProfileMemory
     {
@@ -79,7 +96,50 @@ namespace ZeroAgent.Dialog.Memory
 
         public UserProfile GetOrCreate(string userId, string name = "Operator", UserRole defaultRole = UserRole.Operator)
         {
-            return _profiles.GetOrAdd(userId, id => new UserProfile(id, name, defaultRole));
+            return _profiles.GetOrAdd(userId, id =>
+            {
+                if (id.StartsWith("guest_", StringComparison.OrdinalIgnoreCase) || id.StartsWith("anon_", StringComparison.OrdinalIgnoreCase))
+                {
+                    return UserProfile.CreateGuest(id, string.IsNullOrWhiteSpace(name) || name == "Operator" ? "Khách" : name);
+                }
+                return new UserProfile(id, name, defaultRole);
+            });
         }
+
+        public UserProfile GetOrCreateGuest(string guestSessionId, string name = "Khách")
+        {
+            if (string.IsNullOrWhiteSpace(guestSessionId))
+            {
+                guestSessionId = $"guest_{Guid.NewGuid():N}";
+            }
+            return _profiles.GetOrAdd(guestSessionId, id => UserProfile.CreateGuest(id, name));
+        }
+
+        public bool TryGetProfile(string userId, out UserProfile? profile)
+        {
+            return _profiles.TryGetValue(userId, out profile);
+        }
+
+        public bool UpgradeGuestProfile(string guestId, UserProfile authenticatedProfile)
+        {
+            if (string.IsNullOrWhiteSpace(guestId) || authenticatedProfile == null) return false;
+
+            // Carry over any learned communication pronouns from guest persona if authenticated persona is default
+            if (_profiles.TryGetValue(guestId, out var existingGuest) && existingGuest.IsGuest)
+            {
+                if (authenticatedProfile.Persona.UserPronoun == "bạn" && existingGuest.Persona.UserPronoun != "bạn")
+                {
+                    authenticatedProfile.Persona.UserPronoun = existingGuest.Persona.UserPronoun;
+                    authenticatedProfile.Persona.BotPronoun = existingGuest.Persona.BotPronoun;
+                    authenticatedProfile.Persona.Tone = existingGuest.Persona.Tone;
+                }
+            }
+
+            _profiles[authenticatedProfile.UserId] = authenticatedProfile;
+            _profiles[guestId] = authenticatedProfile;
+            return true;
+        }
+
+        public int Count => _profiles.Count;
     }
 }

@@ -45,6 +45,12 @@ namespace ZeroAgent.Dialog.Generator
             return $"⛔ Truy cập bị từ chối: Thao tác này yêu cầu quyền [{requiredPermission}]. Tài khoản hiện tại không có quyền can thiệp.";
         }
 
+        public string FormatGuestLoginRequired(string requiredPermission, string? intentName = null)
+        {
+            string intentDesc = string.IsNullOrEmpty(intentName) ? "Thao tác này" : $"Thao tác '{intentName}'";
+            return $"🔒 Yêu cầu đăng nhập: Bạn đang ở chế độ Khách (Guest / Chưa đăng nhập). {intentDesc} yêu cầu xác thực tài khoản có quyền [{requiredPermission}]. Quý khách vui lòng đăng nhập để tiếp tục tra cứu hoặc thực hiện tác vụ này.";
+        }
+
         /// <summary>
         /// Renders tabular data (headers and rows) into a clean GitHub Flavored Markdown table.
         /// </summary>

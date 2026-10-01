@@ -15,7 +15,7 @@ namespace ZeroAgent.Dialog.Engine
     /// Orchestrates 4-tier Agentic Memory, Dialogue State Tracking (DST), Tool Execution, and Template Generation.
     /// Operates entirely on CPU in sub-5ms with zero GPU/LLM dependencies.
     /// </summary>
-    public sealed class ZeroDialogEngine
+    public sealed partial class ZeroDialogEngine
     {
         private readonly ConcurrentDictionary<string, DialogueSession> _sessions = new ConcurrentDictionary<string, DialogueSession>(StringComparer.OrdinalIgnoreCase);
 
@@ -45,11 +45,6 @@ namespace ZeroAgent.Dialog.Engine
             Dst = new DialogueStateTracker(Memory.Embedder);
         }
 
-        public DialogueSession GetOrCreateSession(string sessionId)
-        {
-            return _sessions.GetOrAdd(sessionId, id => new DialogueSession(id));
-        }
-
         /// <summary>
         /// Processes a conversational message from the user and returns an action or clarification response.
         /// </summary>
@@ -62,8 +57,8 @@ namespace ZeroAgent.Dialog.Engine
 
             var workingMemory = Memory.GetWorkingMemory(sessionId);
             var session = GetOrCreateSession(sessionId);
-            profile ??= Memory.Profiles.GetOrCreate(sessionId, "DefaultOperator", UserRole.Operator);
-            profile.Persona.RecordUtterance(userMessage);
+            var userProfile = ResolveProfile(sessionId, profile);
+            userProfile.Persona.RecordUtterance(userMessage);
 
             // Step 1: Anaphora / Coreference Resolution via Working Memory
             string resolvedMessage = workingMemory.ResolveAnaphora(userMessage);
@@ -92,68 +87,25 @@ namespace ZeroAgent.Dialog.Engine
                 }
             }
 
-            // Step 3: Explicit Analytical Deliberation (Escalation to Tier 2 ReAct when analytical reasoning requested)
-            bool isAnalyticalDeliberation =
-                resolvedMessage.IndexOf("phân tích", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("tại sao", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("nguyên nhân", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("đối chiếu", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("tổng hợp", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("analyze", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("explain", StringComparison.OrdinalIgnoreCase) >= 0;
-
-            if (isAnalyticalDeliberation && CognitiveEscalationHandler != null)
+            // Step 3: Analytical Deliberation (Escalation to Tier-2 ReAct Agent)
+            var analyticalResp = await TryEscalateAnalyticalQueryAsync(session, workingMemory, userProfile, resolvedMessage, userMessage).ConfigureAwait(false);
+            if (analyticalResp != null)
             {
-                var escalated = await CognitiveEscalationHandler(session, workingMemory, profile, resolvedMessage).ConfigureAwait(false);
-                if (escalated != null)
-                {
-                    workingMemory.AddTurn(userMessage, escalated.Text, escalated.IntentName ?? "COGNITIVE_DELIBERATION_REACT");
-                    return escalated;
-                }
+                return analyticalResp;
             }
 
-            // Step 4: Check Semantic Memory (SOPs / FAQ manuals)
-            bool isDocQuery = resolvedMessage.IndexOf("quy trình", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("hướng dẫn", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("sop", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("tài liệu", StringComparison.OrdinalIgnoreCase) >= 0;
-
-            if (isDocQuery)
-            {
-                var faqMatches = Memory.Semantic.Query(queryEmbedding, topK: 1, minScore: 0.20f);
-                if (faqMatches.Count > 0)
-                {
-                    var doc = faqMatches[0].Item;
-                    string faqAnswer = $"📖 [Tài liệu {doc.Category} - {doc.Title}]:\n{doc.Content}";
-                    workingMemory.AddTurn(userMessage, faqAnswer, "KNOWLEDGE_RETRIEVAL");
-                    return new DialogResponse(faqAnswer, SessionState.Idle, intentName: "KNOWLEDGE_RETRIEVAL", confidence: faqMatches[0].Similarity);
-                }
-            }
-
-            // Step 5: Check Episodic Memory (Historical incidents)
-            bool isHistoryQuery = resolvedMessage.IndexOf("trước", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("lần trước", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("lịch sử", StringComparison.OrdinalIgnoreCase) >= 0
-                || resolvedMessage.IndexOf("sự cố", StringComparison.OrdinalIgnoreCase) >= 0;
-
-            if (isHistoryQuery)
-            {
-                float epMinScore = 0.20f;
-                var pastIncidents = Memory.Episodic.Recall(queryEmbedding, topK: 1, minScore: epMinScore);
-                if (pastIncidents.Count > 0)
-                {
-                    var ep = pastIncidents[0].Episode;
-                    string epAnswer = $"📜 [Ghi nhận sự cố trước đây]:\n- Vấn đề: {ep.Issue}\n- Xử lý: {ep.Resolution}\n- Kết quả: {(ep.Success ? "Thành công" : "Chưa hoàn tất")}";
-                    workingMemory.AddTurn(userMessage, epAnswer, "HISTORICAL_EPISODE");
-                    return new DialogResponse(epAnswer, SessionState.Idle, intentName: "HISTORICAL_EPISODE", confidence: pastIncidents[0].Similarity);
-                }
-            }
-
-            // Step 5: Intent Recognition
+            // Step 4: Intent Recognition
             var (detectedIntent, score) = Dst.MatchIntent(queryEmbedding, resolvedMessage);
             if (score < 0.25f)
             {
                 detectedIntent = null;
+            }
+
+            // Step 5: Memory vs Intent Conflict Arbitration (Knowledge / SOP vs Transactional Intents)
+            var memoryResp = TryArbitrateKnowledgeOrHistory(session, workingMemory, userProfile, resolvedMessage, userMessage, queryEmbedding, detectedIntent, score);
+            if (memoryResp != null)
+            {
+                return memoryResp;
             }
 
             // Step 6: Advance Dialogue State
@@ -179,59 +131,13 @@ namespace ZeroAgent.Dialog.Engine
 
             if (session.State == SessionState.ReadyToExecute && session.CurrentIntent != null)
             {
-                var intent = session.CurrentIntent;
-
-                // RBAC Permission Gate check
-                if (!string.IsNullOrEmpty(intent.RequiredPermission) && !profile.CanExecute(intent.RequiredPermission))
-                {
-                    session.State = SessionState.ActionBlockedByPermission;
-                    string deniedMsg = Generator.FormatPermissionDenied(intent.RequiredPermission);
-                    workingMemory.AddTurn(userMessage, deniedMsg, intent.Name);
-                    return new DialogResponse(deniedMsg, SessionState.ActionBlockedByPermission, intent.Name, session.Slots, false, score);
-                }
-
-                // Execute action
-                string actionOutput;
-                if (intent.ActionHandler != null)
-                {
-                    actionOutput = await intent.ActionHandler(session).ConfigureAwait(false);
-                }
-                else
-                {
-                    actionOutput = $"Tác vụ '{intent.Name}' đã được xác nhận thực thi.";
-                }
-
-                // Update Working Memory active entities
-                foreach (var kvp in session.Slots)
-                {
-                    workingMemory.SetSlot(kvp.Key, kvp.Value);
-                }
-
-                // Record successful action into slots for template rendering
-                session.SetSlot("output", actionOutput);
-
-                string finalResponse = Generator.FormatResponse(intent.ResponseTemplates, session.Slots, actionOutput);
-                workingMemory.AddTurn(userMessage, finalResponse, intent.Name);
-
-                // Populate semantic response cache for idempotent queries (do NOT cache state-mutating actions)
-                if (intent.Name != null
-                    && !intent.Name.StartsWith("SET_", StringComparison.OrdinalIgnoreCase)
-                    && !intent.Name.StartsWith("WRITE_", StringComparison.OrdinalIgnoreCase)
-                    && !intent.Name.StartsWith("STOP_", StringComparison.OrdinalIgnoreCase)
-                    && !intent.Name.Contains("EMERGENCY"))
-                {
-                    Memory.ResponseCache.Store(queryEmbedding, resolvedMessage, finalResponse, intent.Name);
-                }
-
-                profile.Persona.RecordInteraction(intent.Name, session.Slots);
-                session.State = SessionState.Completed;
-                return new DialogResponse(finalResponse, SessionState.Completed, intent.Name, session.Slots, true, score);
+                return await ExecuteIntentAsync(session, workingMemory, userProfile, userMessage, resolvedMessage, queryEmbedding, score).ConfigureAwait(false);
             }
 
             // Step 8: Cognitive Escalation Bridge (Two-Tier Deliberation)
             if (CognitiveEscalationHandler != null)
             {
-                var escalated = await CognitiveEscalationHandler(session, workingMemory, profile, resolvedMessage).ConfigureAwait(false);
+                var escalated = await CognitiveEscalationHandler(session, workingMemory, userProfile, resolvedMessage).ConfigureAwait(false);
                 if (escalated != null)
                 {
                     workingMemory.AddTurn(userMessage, escalated.Text, escalated.IntentName ?? "COGNITIVE_DELIBERATION_REACT");

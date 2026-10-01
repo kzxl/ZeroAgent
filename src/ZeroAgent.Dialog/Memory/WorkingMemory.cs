@@ -128,6 +128,13 @@ namespace ZeroAgent.Dialog.Memory
             CurrentArea = null;
         }
 
+        public void Clear()
+        {
+            _turns.Clear();
+            ClearSlots();
+            SummaryContext = null;
+        }
+
         /// <summary>
         /// Resolves anaphora, pronouns, and implicit subject references based on active working memory.
         /// Replaces 'nó', 'máy đó', 'con đó', 'it', 'that machine', 'bảng đó', 'sản phẩm đó' with the active subject name.

@@ -18,8 +18,9 @@ namespace ZeroAgent.Dialog.Memory
 
     /// <summary>
     /// Long-term User Persona & Behavioral Personalization Memory.
-    /// Tracks communication pronouns, formality, frequent topics, and domain affinities
-    /// across conversations (similar to ChatGPT Custom Instructions & Context History).
+    /// Tracks communication pronouns, formality, and frequent business domains
+    /// across conversations (similar to ChatGPT Custom Instructions & Context History)
+    /// without making arbitrary entity assumptions.
     /// </summary>
     public sealed class UserPersona
     {
@@ -32,7 +33,6 @@ namespace ZeroAgent.Dialog.Memory
         public CommunicationTone Tone { get; set; } = CommunicationTone.Formal;
 
         public ConcurrentDictionary<string, int> TopicFrequencies { get; } = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        public ConcurrentDictionary<string, int> EntityFrequencies { get; } = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         public DateTime LastUpdatedUtc { get; private set; } = DateTime.UtcNow;
 
@@ -95,39 +95,18 @@ namespace ZeroAgent.Dialog.Memory
             {
                 TopicFrequencies.AddOrUpdate(intentName!, 1, (_, count) => count + 1);
             }
-
-            if (slots != null)
-            {
-                foreach (var kvp in slots)
-                {
-                    if (!string.IsNullOrWhiteSpace(kvp.Value))
-                    {
-                        string entityKey = $"{kvp.Key}:{kvp.Value}";
-                        EntityFrequencies.AddOrUpdate(entityKey, 1, (_, count) => count + 1);
-                    }
-                }
-            }
-        }
-
-        public string? GetPreferredEntity(string slotKey)
-        {
-            if (EntityFrequencies.IsEmpty || string.IsNullOrEmpty(slotKey)) return null;
-
-            string prefix = $"{slotKey}:";
-            var candidate = EntityFrequencies
-                .Where(kvp => kvp.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(kvp => kvp.Value)
-                .FirstOrDefault();
-
-            if (candidate.Key == null) return null;
-            return candidate.Key.Substring(prefix.Length);
         }
 
         public string FormatPersonalizedResponse(string rawResponse, string? userName = null)
         {
             if (string.IsNullOrWhiteSpace(rawResponse)) return string.Empty;
 
-            string displayName = !string.IsNullOrWhiteSpace(userName) && userName != "DefaultOperator" && userName != "Operator"
+            string displayName = !string.IsNullOrWhiteSpace(userName)
+                && userName != "DefaultOperator"
+                && userName != "Operator"
+                && userName != "Khách"
+                && userName != "Guest"
+                && userName != "GuestUser"
                 ? " " + userName
                 : string.Empty;
 
@@ -170,12 +149,6 @@ namespace ZeroAgent.Dialog.Memory
             if (!string.IsNullOrEmpty(DominantDomain))
             {
                 sb.AppendLine($"- Dominant Inquired Topic: {DominantDomain} (Queried {TopicFrequencies[DominantDomain!]} times)");
-            }
-
-            var topEntities = EntityFrequencies.OrderByDescending(kvp => kvp.Value).Take(3).ToList();
-            if (topEntities.Count > 0)
-            {
-                sb.AppendLine($"- Frequently Mentioned Entities: {string.Join(", ", topEntities.Select(e => $"{e.Key} ({e.Value}x)"))}");
             }
 
             return sb.ToString().TrimEnd();

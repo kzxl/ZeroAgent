@@ -47,17 +47,14 @@ namespace ZeroAgent.Tests
         {
             var persona = new UserPersona();
 
-            persona.RecordInteraction("ERP_QUERY_SALES_ORDER", new Dictionary<string, string> { ["customer"] = "Minh Long" });
-            persona.RecordInteraction("ERP_QUERY_SALES_ORDER", new Dictionary<string, string> { ["customer"] = "Minh Long" });
-            persona.RecordInteraction("ERP_QUERY_SALES_ORDER", new Dictionary<string, string> { ["customer"] = "An Phat" });
-            persona.RecordInteraction("ERP_CHECK_INVENTORY", new Dictionary<string, string> { ["warehouse"] = "Kho A" });
+            persona.RecordInteraction("ERP_QUERY_SALES_ORDER");
+            persona.RecordInteraction("ERP_QUERY_SALES_ORDER");
+            persona.RecordInteraction("ERP_QUERY_SALES_ORDER");
+            persona.RecordInteraction("ERP_CHECK_INVENTORY");
 
             Assert.Equal("ERP_QUERY_SALES_ORDER", persona.DominantDomain);
             Assert.Equal(3, persona.TopicFrequencies["ERP_QUERY_SALES_ORDER"]);
             Assert.Equal(1, persona.TopicFrequencies["ERP_CHECK_INVENTORY"]);
-
-            string? preferredCustomer = persona.GetPreferredEntity("customer");
-            Assert.Equal("Minh Long", preferredCustomer);
         }
 
         [Fact]
@@ -65,7 +62,7 @@ namespace ZeroAgent.Tests
         {
             var persona = new UserPersona();
             persona.RecordUtterance("Em kiểm tra giúp anh nhé");
-            persona.RecordInteraction("ERP_QUERY_SALES_ORDER", new Dictionary<string, string> { ["order_code"] = "SO-1082" });
+            persona.RecordInteraction("ERP_QUERY_SALES_ORDER");
 
             string summary = persona.GetPersonaPromptSummary("Phong Võ");
 
@@ -74,7 +71,6 @@ namespace ZeroAgent.Tests
             Assert.Contains("anh", summary);
             Assert.Contains("em", summary);
             Assert.Contains("ERP_QUERY_SALES_ORDER", summary);
-            Assert.Contains("SO-1082", summary);
         }
 
         [Fact]

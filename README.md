@@ -119,7 +119,31 @@ Similar to ChatGPT's custom instructions and context memory, ZeroAgent tracks lo
 
 - **Linguistic Pronoun Detection**: Dynamically recognizes communication pronouns ("anh - em", "tao - mày", "tôi - bạn") from user utterances and automatically personalizes response salutations (`Dạ anh...`, `...nhé!`).
 - **Domain & Topic Affinity**: Tracks interaction frequencies per intent (`DominantDomain`), enabling rapid disambiguation of ambiguous questions (e.g. defaulting to Sales Orders for Sales Managers without repetitive confirmation).
-- **Entity Memory**: Remembers preferred customers, equipment IDs, and warehouse areas per user.
+- **Transactional Safety (No Entity Guessing)**: Avoids arbitrarily pre-filling or assuming specific entities (customers, order codes); users must explicitly provide or confirm entity identifiers to guarantee enterprise transactional integrity.
+
+---
+
+## 🚪 Anonymous Guest Chat & In-Flight Session Upgrade (`UserRole.Guest`)
+
+ZeroAgent natively supports unauthenticated public guest interactions alongside enterprise users:
+
+- **Auto-Detection & Session Isolation**: Session IDs prefixed with `guest_` or `anon_` are automatically resolved to `UserRole.Guest`. Each guest operates with strictly isolated ephemeral memory, preventing cross-guest persona contamination.
+- **Public Inquiries Without Login**: Guests can freely access public FAQs, company information, and SOP manuals indexed in `SemanticMemory`.
+- **Role-Based Action Gates**: Protected operational intents (machine control, live PLC actuation, sensitive ERP financial/sales queries) are blocked by RBAC gates with a polite, non-punitive authentication prompt (`FormatGuestLoginRequired`).
+- **In-Flight Session Upgrade (`UpgradeGuestSession`)**: When a guest logs in midway through a conversation, their collected slots, multi-turn history, and intent state are seamlessly migrated to the authenticated `UserProfile`, allowing immediate execution without re-asking questions.
+
+---
+
+## ⚖️ Memory vs Intent Dynamic Conflict Arbitration Matrix
+
+To eliminate collisions between vector memory search (Semantic / Episodic) and transactional intents:
+
+| Layer / Mechanism | Conflict / Duplication Mode | Dynamic Arbitration Resolution |
+|---|---|---|
+| **Working Memory Guard** | User answering a slot matches keywords in a document | During `SessionState.CollectingSlots`, slot accumulation strictly takes precedence over memory queries, preventing dialogue loops. |
+| **Substring Intent Ambiguity** | Query contains "quá nhiệt" in "Quy trình xử lý quá nhiệt F-01" | Explicit inquiry modifiers (`quy trình`, `hướng dẫn`, `sự cố`, `lịch sử`) route directly to Knowledge / Episodic retrieval rather than misfiring live telemetry (`CHECK_TEMPERATURE`). |
+| **Conversational Interruption** | User digresses with an SOP question while filling slots | Knowledge query is resolved immediately (`SessionState.Idle`), while preserving the pending slot in Working Memory for subsequent turns. |
+| **High-Confidence Intent Supremacy** | Generic document keyword overlaps with dedicated intent | Specialized operational intents with high confidence ($\ge 0.65$) take precedence over loose keyword document matches. |
 
 ---
 
