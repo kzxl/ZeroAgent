@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ZeroAgent.Core.Embedding;
 using ZeroVector.Core.Indices;
 using ZeroVector.Core.Metrics;
 using ZeroVector.Core.Results;
@@ -68,6 +69,22 @@ namespace ZeroAgent.Core.Memory
             }
 
             return results;
+        }
+
+        public int Remember(string text, ITextEmbedder embedder)
+        {
+            if (embedder == null) throw new ArgumentNullException(nameof(embedder));
+            if (string.IsNullOrWhiteSpace(text)) return -1;
+            var vec = embedder.Embed(text);
+            return Remember(text, vec);
+        }
+
+        public List<(string Memory, float SimilarityScore)> Recall(string query, ITextEmbedder embedder, int topK = 5)
+        {
+            if (embedder == null) throw new ArgumentNullException(nameof(embedder));
+            if (string.IsNullOrWhiteSpace(query) || topK <= 0) return new List<(string, float)>();
+            var vec = embedder.Embed(query);
+            return Recall(vec, topK);
         }
 
         public void Clear()

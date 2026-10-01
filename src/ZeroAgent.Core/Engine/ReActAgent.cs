@@ -7,6 +7,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ZeroAgent.Core.Context;
+using ZeroAgent.Core.Embedding;
+using ZeroAgent.Core.Memory;
 using ZeroAgent.Core.Tools;
 using ZeroPrompt.Core.Caching;
 
@@ -27,6 +29,10 @@ namespace ZeroAgent.Core.Engine
         public Func<ReActLoopGuard> CreateLoopGuard { get; set; } = () => new ReActLoopGuard();
         public ToolSemanticRouter? ToolRouter { get; set; }
         public int MaxPromptTools { get; set; } = 0;
+        public AgentEpisodicMemory? EpisodicMemory { get; set; }
+        public ITextEmbedder? MemoryEmbedder { get; set; }
+        public bool AutoRecordEpisodes { get; set; } = true;
+        public float EpisodicRecallMinSimilarity { get; set; } = 0.50f;
 
         public ReActAgent(string name, string role, AgentToolRegistry tools, ILlmClient llm)
         {
@@ -68,6 +74,10 @@ namespace ZeroAgent.Core.Engine
                 if (ToolCallParser.TryParseFinalAnswer(completion, out string answer))
                 {
                     sw.Stop();
+                    if (AutoRecordEpisodes && EpisodicMemory != null && MemoryEmbedder != null && !string.IsNullOrWhiteSpace(context.Goal))
+                    {
+                        EpisodicMemory.Remember($"Goal: {context.Goal} => Solution: {answer.Trim()}", MemoryEmbedder);
+                    }
                     return AgentResponse.Succeeded(answer, currentStep, sw.Elapsed, context.History);
                 }
 
@@ -115,6 +125,10 @@ namespace ZeroAgent.Core.Engine
                 {
                     // No action or final answer detected: Treat completion as answer
                     sw.Stop();
+                    if (AutoRecordEpisodes && EpisodicMemory != null && MemoryEmbedder != null && !string.IsNullOrWhiteSpace(context.Goal))
+                    {
+                        EpisodicMemory.Remember($"Goal: {context.Goal} => Solution: {completion.Trim()}", MemoryEmbedder);
+                    }
                     return AgentResponse.Succeeded(completion.Trim(), currentStep, sw.Elapsed, context.History);
                 }
             }
@@ -167,6 +181,23 @@ namespace ZeroAgent.Core.Engine
                 toolsPrompt = Tools.GetToolsPrompt();
             }
             optimizer.AddTools(toolsPrompt, "react_tool_definitions");
+
+            // 2.5 Injected Episodic Memory (Recall prior successful trajectories for similar goals)
+            if (EpisodicMemory != null && MemoryEmbedder != null && !string.IsNullOrWhiteSpace(context?.Goal))
+            {
+                var pastExperiences = EpisodicMemory.Recall(context!.Goal, MemoryEmbedder, topK: 2);
+                var relevantEpisodes = pastExperiences.FindAll(e => e.SimilarityScore >= EpisodicRecallMinSimilarity);
+                if (relevantEpisodes.Count > 0)
+                {
+                    var sb = new StringBuilder();
+                    sb.AppendLine("Relevant past successful experiences for similar goals:");
+                    foreach (var (memory, _) in relevantEpisodes)
+                    {
+                        sb.AppendLine($"- {memory}");
+                    }
+                    optimizer.AddFewShot(sb.ToString().TrimEnd(), "react_episodic_exemplars");
+                }
+            }
 
             // 3. Prior Dialogue History
             if (context != null)
