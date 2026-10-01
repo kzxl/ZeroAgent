@@ -7,6 +7,7 @@ namespace ZeroAgent.Core.Context
     {
         public bool Success { get; }
         public string Output { get; }
+        public string? ErrorMessage => !Success ? Output : null;
         public int TotalSteps { get; }
         public TimeSpan Elapsed { get; }
         public IReadOnlyList<AgentMessage> ExecutionTrace { get; }
