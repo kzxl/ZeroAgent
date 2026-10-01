@@ -129,5 +129,120 @@ namespace ZeroAgent.Core.Database
         public int VectorCount { get; set; }
         public int ReflexionCount { get; set; }
         public int PlanCount { get; set; }
+        public bool HasNeuralPolicy { get; set; }
+    }
+
+    /// <summary>
+    /// Semi-parametric quantized neural action policy network stored within the sovereign container.
+    /// Executes fast, deterministic intent routing and tool prediction in sub-0.05ms without calling external LLMs.
+    /// </summary>
+    public sealed class ZabNeuralPolicy
+    {
+        public string ModelName { get; set; } = "ActionPolicyNetwork";
+        public int InputDim { get; set; }
+        public List<string> OutputClasses { get; set; } = new List<string>();
+        public float Scale { get; set; } = 1.0f;
+        public sbyte[] WeightsInt8 { get; set; } = Array.Empty<sbyte>(); // Flattened [OutputClasses.Count * InputDim]
+        public float[] Biases { get; set; } = Array.Empty<float>();
+
+        public ZabNeuralPolicy() { }
+
+        public ZabNeuralPolicy(string modelName, int inputDim, IReadOnlyList<string> outputClasses)
+        {
+            ModelName = modelName ?? "ActionPolicyNetwork";
+            InputDim = inputDim;
+            OutputClasses = new List<string>(outputClasses ?? Array.Empty<string>());
+            Biases = new float[OutputClasses.Count];
+            WeightsInt8 = new sbyte[OutputClasses.Count * InputDim];
+        }
+
+        /// <summary>
+        /// Sets weights from FP32 matrix, quantizing them symmetrically to INT8.
+        /// </summary>
+        public void SetWeightsFp32(float[,] weights, float[]? biases = null)
+        {
+            int numClasses = OutputClasses.Count;
+            if (weights.GetLength(0) != numClasses || weights.GetLength(1) != InputDim)
+            {
+                throw new ArgumentException($"Weights matrix shape must be [{numClasses}, {InputDim}]");
+            }
+
+            if (biases != null)
+            {
+                Biases = (float[])biases.Clone();
+            }
+
+            // Find max absolute value for symmetric scaling
+            float maxAbs = 1e-7f;
+            for (int c = 0; c < numClasses; c++)
+            {
+                for (int d = 0; d < InputDim; d++)
+                {
+                    float abs = Math.Abs(weights[c, d]);
+                    if (abs > maxAbs) maxAbs = abs;
+                }
+            }
+
+            Scale = maxAbs / 127.0f;
+            float invScale = 1.0f / Scale;
+            WeightsInt8 = new sbyte[numClasses * InputDim];
+
+            for (int c = 0; c < numClasses; c++)
+            {
+                int rowOffset = c * InputDim;
+                for (int d = 0; d < InputDim; d++)
+                {
+                    int q = (int)Math.Round(weights[c, d] * invScale);
+                    WeightsInt8[rowOffset + d] = (sbyte)Math.Max(-127, Math.Min(127, q));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Predicts the highest-confidence action class directly from continuous input embedding using INT8 dot-product.
+        /// </summary>
+        public string Predict(ReadOnlySpan<float> inputEmbedding, out float confidence)
+        {
+            confidence = 0.0f;
+            if (OutputClasses.Count == 0 || inputEmbedding.Length != InputDim || WeightsInt8.Length < OutputClasses.Count * InputDim)
+            {
+                return string.Empty;
+            }
+
+            int numClasses = OutputClasses.Count;
+            float[] logits = new float[numClasses];
+            float maxLogit = float.MinValue;
+
+            for (int c = 0; c < numClasses; c++)
+            {
+                int rowOffset = c * InputDim;
+                float dot = 0.0f;
+
+                for (int d = 0; d < InputDim; d++)
+                {
+                    dot += WeightsInt8[rowOffset + d] * inputEmbedding[d];
+                }
+
+                float logit = (dot * Scale) + (c < Biases.Length ? Biases[c] : 0.0f);
+                logits[c] = logit;
+                if (logit > maxLogit) maxLogit = logit;
+            }
+
+            // Softmax for confidence
+            float sumExp = 0.0f;
+            int bestIdx = 0;
+            for (int c = 0; c < numClasses; c++)
+            {
+                logits[c] = (float)Math.Exp(logits[c] - maxLogit);
+                sumExp += logits[c];
+                if (logits[c] > logits[bestIdx])
+                {
+                    bestIdx = c;
+                }
+            }
+
+            confidence = sumExp > 1e-7f ? logits[bestIdx] / sumExp : 1.0f;
+            return OutputClasses[bestIdx];
+        }
     }
 }

@@ -19,6 +19,7 @@ namespace ZeroAgent.Core.Database
         public DateTime LastModifiedUtc { get; set; } = DateTime.UtcNow;
         public uint ChecksumCrc32C { get; set; }
         public uint Flags { get; set; }
+        public long WalSequenceNumber { get; set; } // Log Sequence Number (LSN)
 
         // Section Offsets and Lengths (Table of Contents)
         public long ManifestOffset { get; set; }
@@ -36,6 +37,9 @@ namespace ZeroAgent.Core.Database
         public long PlansOffset { get; set; }
         public int PlansLength { get; set; }
 
+        public long NeuralOffset { get; set; }
+        public int NeuralLength { get; set; }
+
         public bool IsValid => Magic == MagicValue && Version == CurrentVersion;
 
         public void Write(BinaryWriter writer)
@@ -50,6 +54,7 @@ namespace ZeroAgent.Core.Database
             writer.Write(LastModifiedUtc.ToBinary());
             writer.Write(ChecksumCrc32C);
             writer.Write(Flags);
+            writer.Write(WalSequenceNumber);
 
             writer.Write(ManifestOffset);
             writer.Write(ManifestLength);
@@ -65,6 +70,9 @@ namespace ZeroAgent.Core.Database
 
             writer.Write(PlansOffset);
             writer.Write(PlansLength);
+
+            writer.Write(NeuralOffset);
+            writer.Write(NeuralLength);
 
             // Pad remaining bytes up to HeaderSize (128 bytes)
             long written = writer.BaseStream.Position - startPos;
@@ -89,6 +97,7 @@ namespace ZeroAgent.Core.Database
                 LastModifiedUtc = DateTime.FromBinary(reader.ReadInt64()),
                 ChecksumCrc32C = reader.ReadUInt32(),
                 Flags = reader.ReadUInt32(),
+                WalSequenceNumber = reader.ReadInt64(),
 
                 ManifestOffset = reader.ReadInt64(),
                 ManifestLength = reader.ReadInt32(),
@@ -103,7 +112,10 @@ namespace ZeroAgent.Core.Database
                 ReflexionsLength = reader.ReadInt32(),
 
                 PlansOffset = reader.ReadInt64(),
-                PlansLength = reader.ReadInt32()
+                PlansLength = reader.ReadInt32(),
+
+                NeuralOffset = reader.ReadInt64(),
+                NeuralLength = reader.ReadInt32()
             };
 
             // Skip remaining padding to align to HeaderSize (128 bytes)

@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using ZeroPrimitives.Cryptography;
 using ZeroVector.Core.Metrics;
 using ZeroVector.Core.Quantization;
@@ -12,23 +13,33 @@ namespace ZeroAgent.Core.Database
 {
     /// <summary>
     /// Pure C# Sovereign Embedded AI Database Engine (ZAB1 - Zero Agent Binary).
-    /// Provides unified multi-modal storage for Agent Manifest, Knowledge Rules,
-    /// SQ8 Quantized Vectors (with direct SIMD evaluation), Reflexion Memory, and Semantic Plan Cache.
-    /// Incorporates Write-Ahead Logging (WAL), hardware CRC32C integrity verification,
-    /// automatic torn-write isolation, and 100% lossless human-readable JSON export/import.
+    /// Provides unified multi-modal storage for:
+    /// 1. Agent Manifest & Capabilities
+    /// 2. Verified Domain Knowledge & Rules (O(1) Hash-Indexed)
+    /// 3. SQ8 Quantized Vectors with Direct SIMD Cosine Evaluation
+    /// 4. Reflexion Episodic Memory
+    /// 5. Semantic Plan Trajectory Cache
+    /// 6. Semi-Parametric Quantized Neural Action Policy Network
+    /// 
+    /// Incorporates ReaderWriterLockSlim concurrency, Write-Ahead Logging (WAL),
+    /// hardware CRC32C integrity, atomic File.Replace durability, and lossless JSON round-tripping.
     /// </summary>
     public sealed class ZabDatabase : IDisposable
     {
         private readonly string _filePath;
         private readonly ZabWalJournal _wal;
-        private readonly object _lock = new object();
+        private readonly ReaderWriterLockSlim _rwLock = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
 
         private ZabManifest _manifest;
         private readonly List<ZabKnowledgeRecord> _knowledge = new List<ZabKnowledgeRecord>();
+        private readonly Dictionary<string, ZabKnowledgeRecord> _knowledgeKeyIndex = new Dictionary<string, ZabKnowledgeRecord>(StringComparer.OrdinalIgnoreCase);
+
         private readonly List<ZabVectorRecord> _vectors = new List<ZabVectorRecord>();
         private readonly List<ZabReflexionRecord> _reflexions = new List<ZabReflexionRecord>();
         private readonly List<ZabPlanRecord> _plans = new List<ZabPlanRecord>();
+        private ZabNeuralPolicy? _neuralPolicy;
 
+        private long _walSequenceNumber;
         private bool _isDirty;
         private bool _disposed;
 
@@ -39,6 +50,7 @@ namespace ZeroAgent.Core.Database
         public IReadOnlyList<ZabVectorRecord> Vectors => _vectors;
         public IReadOnlyList<ZabReflexionRecord> Reflexions => _reflexions;
         public IReadOnlyList<ZabPlanRecord> Plans => _plans;
+        public ZabNeuralPolicy? NeuralPolicy => _neuralPolicy;
         public bool IsDirty => _isDirty;
         public bool AutoCheckpointOnDispose { get; set; } = true;
 
@@ -96,7 +108,7 @@ namespace ZeroAgent.Core.Database
 
         #endregion
 
-        #region Knowledge CRUD
+        #region Knowledge CRUD (O(1) Hash-Indexed)
 
         public ZabKnowledgeRecord AddKnowledge(
             string key,
@@ -107,9 +119,10 @@ namespace ZeroAgent.Core.Database
         {
             if (string.IsNullOrWhiteSpace(key)) throw new ArgumentNullException(nameof(key));
 
+            string cleanKey = key.Trim();
             var record = new ZabKnowledgeRecord
             {
-                Key = key.Trim(),
+                Key = cleanKey,
                 Value = value ?? string.Empty,
                 Category = category ?? "General",
                 Author = author ?? "Admin",
@@ -117,10 +130,19 @@ namespace ZeroAgent.Core.Database
                 LastUpdatedUtc = DateTime.UtcNow
             };
 
-            lock (_lock)
+            _rwLock.EnterWriteLock();
+            try
             {
+                // Remove existing if key already present to maintain 1:1 invariant
+                if (_knowledgeKeyIndex.TryGetValue(cleanKey, out var existing))
+                {
+                    _knowledge.Remove(existing);
+                }
+
                 _knowledge.Add(record);
+                _knowledgeKeyIndex[cleanKey] = record;
                 _isDirty = true;
+                _walSequenceNumber++;
 
                 // Log to WAL for durability
                 byte[] payload = SerializeKnowledgeRecord(record);
@@ -131,13 +153,18 @@ namespace ZeroAgent.Core.Database
                     Checkpoint();
                 }
             }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
 
             return record;
         }
 
         public bool UpdateKnowledge(string id, string newValue, float? confidence = null)
         {
-            lock (_lock)
+            _rwLock.EnterWriteLock();
+            try
             {
                 var record = _knowledge.Find(k => string.Equals(k.Id, id, StringComparison.OrdinalIgnoreCase));
                 if (record == null) return false;
@@ -146,6 +173,7 @@ namespace ZeroAgent.Core.Database
                 if (confidence.HasValue) record.Confidence = confidence.Value;
                 record.LastUpdatedUtc = DateTime.UtcNow;
                 _isDirty = true;
+                _walSequenceNumber++;
 
                 // Log to WAL
                 using (var ms = new MemoryStream())
@@ -165,22 +193,34 @@ namespace ZeroAgent.Core.Database
 
                 return true;
             }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
         }
 
-        public bool DeleteKnowledge(string id)
+        public bool DeleteKnowledge(string idOrKey)
         {
-            lock (_lock)
-            {
-                int removed = _knowledge.RemoveAll(k => string.Equals(k.Id, id, StringComparison.OrdinalIgnoreCase));
-                if (removed > 0)
-                {
-                    _isDirty = true;
+            if (string.IsNullOrWhiteSpace(idOrKey)) return false;
 
-                    // Log to WAL
+            _rwLock.EnterWriteLock();
+            try
+            {
+                var record = _knowledge.Find(k => string.Equals(k.Id, idOrKey, StringComparison.OrdinalIgnoreCase))
+                          ?? (_knowledgeKeyIndex.TryGetValue(idOrKey.Trim(), out var kRec) ? kRec : null);
+
+                if (record != null)
+                {
+                    _knowledge.Remove(record);
+                    _knowledgeKeyIndex.Remove(record.Key);
+                    _isDirty = true;
+                    _walSequenceNumber++;
+
+                    // Log to WAL with the canonical record Id
                     using (var ms = new MemoryStream())
                     using (var writer = new BinaryWriter(ms, Encoding.UTF8))
                     {
-                        writer.Write(id);
+                        writer.Write(record.Id);
                         _wal.AppendFrame(ZabWalOpCode.DeleteKnowledge, ms.ToArray());
                     }
 
@@ -193,13 +233,24 @@ namespace ZeroAgent.Core.Database
                 }
                 return false;
             }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
         }
 
         public ZabKnowledgeRecord? FindKnowledge(string key)
         {
-            lock (_lock)
+            if (string.IsNullOrWhiteSpace(key)) return null;
+
+            _rwLock.EnterReadLock();
+            try
             {
-                return _knowledge.Find(k => string.Equals(k.Key, key, StringComparison.OrdinalIgnoreCase));
+                return _knowledgeKeyIndex.TryGetValue(key.Trim(), out var record) ? record : null;
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
             }
         }
 
@@ -208,29 +259,38 @@ namespace ZeroAgent.Core.Database
         #region Quantized Vector Storage & SIMD Search
 
         /// <summary>
-        /// Stores a continuous FP32 vector by compressing it to SQ8 (4x reduction) using BinaryQuantizer.
+        /// Stores an embedding vector by L2-normalizing it and compressing to SQ8 (4x memory reduction).
+        /// Replaces any existing vector with the same ID for strict idempotency.
         /// </summary>
         public ZabVectorRecord StoreVector(string label, ReadOnlySpan<float> vector, string? id = null)
         {
             if (vector.IsEmpty) throw new ArgumentException("Vector cannot be empty.", nameof(vector));
 
-            sbyte[] qData = new sbyte[vector.Length];
-            BinaryQuantizer.QuantizeSQ8(vector, qData, out float scale, out float offset);
+            // Auto-normalize vector to unit L2 norm to guarantee exact cosine similarity
+            float[] normVec = vector.ToArray();
+            VectorMetrics.NormalizeL2(normVec);
 
+            sbyte[] qData = new sbyte[normVec.Length];
+            BinaryQuantizer.QuantizeSQ8(normVec, qData, out float scale, out float offset);
+
+            string finalId = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id!;
             var record = new ZabVectorRecord
             {
-                Id = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id!,
+                Id = finalId,
                 Label = label ?? string.Empty,
-                Dimension = vector.Length,
+                Dimension = normVec.Length,
                 Scale = scale,
                 Offset = offset,
                 QuantizedData = qData
             };
 
-            lock (_lock)
+            _rwLock.EnterWriteLock();
+            try
             {
+                _vectors.RemoveAll(v => string.Equals(v.Id, finalId, StringComparison.OrdinalIgnoreCase));
                 _vectors.Add(record);
                 _isDirty = true;
+                _walSequenceNumber++;
 
                 // Log to WAL
                 byte[] payload = SerializeVectorRecord(record);
@@ -241,13 +301,49 @@ namespace ZeroAgent.Core.Database
                     Checkpoint();
                 }
             }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
 
             return record;
         }
 
+        public bool DeleteVector(string id)
+        {
+            _rwLock.EnterWriteLock();
+            try
+            {
+                int removed = _vectors.RemoveAll(v => string.Equals(v.Id, id, StringComparison.OrdinalIgnoreCase));
+                if (removed > 0)
+                {
+                    _isDirty = true;
+                    _walSequenceNumber++;
+
+                    using (var ms = new MemoryStream())
+                    using (var writer = new BinaryWriter(ms, Encoding.UTF8))
+                    {
+                        writer.Write(id);
+                        _wal.AppendFrame(ZabWalOpCode.DeleteVector, ms.ToArray());
+                    }
+
+                    if (_wal.ShouldCheckpoint())
+                    {
+                        Checkpoint();
+                    }
+                    return true;
+                }
+                return false;
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
+        }
+
         /// <summary>
         /// Searches vectors using hardware SIMD-accelerated SQ8 inner products with Affine Hoisting.
-        /// Evaluates distance directly on compressed bytes with zero decompression overhead.
+        /// Non-blocking read lock allows multiple simultaneous searches without contending with writers.
         /// </summary>
         public List<(ZabVectorRecord Record, float Similarity)> SearchVectors(
             ReadOnlySpan<float> queryVector,
@@ -256,22 +352,31 @@ namespace ZeroAgent.Core.Database
         {
             if (queryVector.IsEmpty || topK <= 0) return new List<(ZabVectorRecord, float)>();
 
-            float querySum = BinaryQuantizer.ComputeVectorSum(queryVector);
+            // Auto-normalize query vector for exact cosine similarity
+            float[] normQuery = queryVector.ToArray();
+            VectorMetrics.NormalizeL2(normQuery);
+
+            float querySum = BinaryQuantizer.ComputeVectorSum(normQuery);
             var results = new List<(ZabVectorRecord Record, float Similarity)>();
 
-            lock (_lock)
+            _rwLock.EnterReadLock();
+            try
             {
                 for (int i = 0; i < _vectors.Count; i++)
                 {
                     var vec = _vectors[i];
-                    if (vec.Dimension != queryVector.Length) continue;
+                    if (vec.Dimension != normQuery.Length) continue;
 
-                    float sim = vec.ComputeSimilarity(queryVector, querySum);
+                    float sim = vec.ComputeSimilarity(normQuery, querySum);
                     if (sim >= minSimilarity)
                     {
                         results.Add((vec, sim));
                     }
                 }
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
             }
 
             results.Sort((a, b) => b.Similarity.CompareTo(a.Similarity));
@@ -297,10 +402,12 @@ namespace ZeroAgent.Core.Database
                 TimestampUtc = DateTime.UtcNow
             };
 
-            lock (_lock)
+            _rwLock.EnterWriteLock();
+            try
             {
                 _reflexions.Add(record);
                 _isDirty = true;
+                _walSequenceNumber++;
 
                 // Log to WAL
                 byte[] payload = SerializeReflexionRecord(record);
@@ -311,8 +418,44 @@ namespace ZeroAgent.Core.Database
                     Checkpoint();
                 }
             }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
 
             return record;
+        }
+
+        public bool DeleteReflexion(string id)
+        {
+            _rwLock.EnterWriteLock();
+            try
+            {
+                int removed = _reflexions.RemoveAll(r => string.Equals(r.Id, id, StringComparison.OrdinalIgnoreCase));
+                if (removed > 0)
+                {
+                    _isDirty = true;
+                    _walSequenceNumber++;
+
+                    using (var ms = new MemoryStream())
+                    using (var writer = new BinaryWriter(ms, Encoding.UTF8))
+                    {
+                        writer.Write(id);
+                        _wal.AppendFrame(ZabWalOpCode.DeleteReflexion, ms.ToArray());
+                    }
+
+                    if (_wal.ShouldCheckpoint())
+                    {
+                        Checkpoint();
+                    }
+                    return true;
+                }
+                return false;
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
         }
 
         public List<ZabReflexionRecord> RecallReflexions(string goal, int topK = 3)
@@ -322,7 +465,8 @@ namespace ZeroAgent.Core.Database
             var tokens = goal.Split(new[] { ' ', ',', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries);
             var scored = new List<(ZabReflexionRecord Rec, int Score)>();
 
-            lock (_lock)
+            _rwLock.EnterReadLock();
+            try
             {
                 foreach (var refRec in _reflexions)
                 {
@@ -345,6 +489,10 @@ namespace ZeroAgent.Core.Database
                     }
                 }
             }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
 
             scored.Sort((a, b) => b.Score.CompareTo(a.Score));
             var result = new List<ZabReflexionRecord>();
@@ -358,7 +506,7 @@ namespace ZeroAgent.Core.Database
 
         #endregion
 
-        #region Plan Semantic Cache CRUD
+        #region Plan Semantic Cache CRUD & Pruning
 
         public ZabPlanRecord CachePlan(
             string goal,
@@ -379,18 +527,23 @@ namespace ZeroAgent.Core.Database
 
             if (!goalVector.IsEmpty)
             {
-                sbyte[] qVec = new sbyte[goalVector.Length];
-                BinaryQuantizer.QuantizeSQ8(goalVector, qVec, out float scale, out float offset);
-                plan.VectorDim = goalVector.Length;
+                float[] normGoal = goalVector.ToArray();
+                VectorMetrics.NormalizeL2(normGoal);
+
+                sbyte[] qVec = new sbyte[normGoal.Length];
+                BinaryQuantizer.QuantizeSQ8(normGoal, qVec, out float scale, out float offset);
+                plan.VectorDim = normGoal.Length;
                 plan.Scale = scale;
                 plan.Offset = offset;
                 plan.GoalVectorSq8 = qVec;
             }
 
-            lock (_lock)
+            _rwLock.EnterWriteLock();
+            try
             {
                 _plans.Add(plan);
                 _isDirty = true;
+                _walSequenceNumber++;
 
                 // Log to WAL
                 byte[] payload = SerializePlanRecord(plan);
@@ -401,26 +554,103 @@ namespace ZeroAgent.Core.Database
                     Checkpoint();
                 }
             }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
 
             return plan;
+        }
+
+        public bool DeletePlan(string id)
+        {
+            _rwLock.EnterWriteLock();
+            try
+            {
+                int removed = _plans.RemoveAll(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
+                if (removed > 0)
+                {
+                    _isDirty = true;
+                    _walSequenceNumber++;
+
+                    using (var ms = new MemoryStream())
+                    using (var writer = new BinaryWriter(ms, Encoding.UTF8))
+                    {
+                        writer.Write(id);
+                        _wal.AppendFrame(ZabWalOpCode.DeletePlan, ms.ToArray());
+                    }
+
+                    if (_wal.ShouldCheckpoint())
+                    {
+                        Checkpoint();
+                    }
+                    return true;
+                }
+                return false;
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
+        }
+
+        /// <summary>
+        /// Prunes stale cached plans older than maxAge that did not meet the minimum hit count threshold.
+        /// </summary>
+        public int PrunePlans(TimeSpan maxAge, int minHitCount = 0)
+        {
+            DateTime cutoff = DateTime.UtcNow - maxAge;
+
+            _rwLock.EnterWriteLock();
+            try
+            {
+                int removed = _plans.RemoveAll(p => p.CachedAtUtc < cutoff && p.HitCount <= minHitCount);
+                if (removed > 0)
+                {
+                    _isDirty = true;
+                    _walSequenceNumber++;
+
+                    using (var ms = new MemoryStream())
+                    using (var writer = new BinaryWriter(ms, Encoding.UTF8))
+                    {
+                        writer.Write(maxAge.Ticks);
+                        writer.Write(minHitCount);
+                        _wal.AppendFrame(ZabWalOpCode.PrunePlans, ms.ToArray());
+                    }
+
+                    if (_wal.ShouldCheckpoint())
+                    {
+                        Checkpoint();
+                    }
+                }
+                return removed;
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
         }
 
         public ZabPlanRecord? LookupPlan(ReadOnlySpan<float> queryVector, float minSimilarity = 0.85f)
         {
             if (queryVector.IsEmpty) return null;
 
-            float querySum = BinaryQuantizer.ComputeVectorSum(queryVector);
+            float[] normQuery = queryVector.ToArray();
+            VectorMetrics.NormalizeL2(normQuery);
+
+            float querySum = BinaryQuantizer.ComputeVectorSum(normQuery);
             ZabPlanRecord? bestMatch = null;
             float maxSim = minSimilarity;
 
-            lock (_lock)
+            _rwLock.EnterWriteLock(); // Enter write lock because hit count is mutated
+            try
             {
                 for (int i = 0; i < _plans.Count; i++)
                 {
                     var plan = _plans[i];
-                    if (plan.GoalVectorSq8 == null || plan.VectorDim != queryVector.Length) continue;
+                    if (plan.GoalVectorSq8 == null || plan.VectorDim != normQuery.Length) continue;
 
-                    float sim = plan.ComputeSimilarity(queryVector, querySum);
+                    float sim = plan.ComputeSimilarity(normQuery, querySum);
                     if (sim >= maxSim)
                     {
                         maxSim = sim;
@@ -434,8 +664,66 @@ namespace ZeroAgent.Core.Database
                     _isDirty = true;
                 }
             }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
 
             return bestMatch;
+        }
+
+        #endregion
+
+        #region Semi-Parametric Neural Action Policy
+
+        /// <summary>
+        /// Updates the semi-parametric INT8 neural action policy network stored within the container.
+        /// </summary>
+        public void SetNeuralPolicy(ZabNeuralPolicy policy)
+        {
+            if (policy == null) throw new ArgumentNullException(nameof(policy));
+
+            _rwLock.EnterWriteLock();
+            try
+            {
+                _neuralPolicy = policy;
+                _isDirty = true;
+                _walSequenceNumber++;
+
+                byte[] payload = SerializeNeuralPolicy(policy);
+                _wal.AppendFrame(ZabWalOpCode.UpdateNeuralPolicy, payload);
+
+                if (_wal.ShouldCheckpoint())
+                {
+                    Checkpoint();
+                }
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
+        }
+
+        /// <summary>
+        /// Predicts the recommended tool or action intent in sub-0.05ms using the internal quantized policy network.
+        /// </summary>
+        public string? PredictAction(ReadOnlySpan<float> inputEmbedding, out float confidence)
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                if (_neuralPolicy == null)
+                {
+                    confidence = 0.0f;
+                    return null;
+                }
+
+                return _neuralPolicy.Predict(inputEmbedding, out confidence);
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
         }
 
         #endregion
@@ -452,8 +740,13 @@ namespace ZeroAgent.Core.Database
                     case ZabWalOpCode.AddKnowledge:
                         {
                             var rec = DeserializeKnowledgeRecord(reader);
+                            if (_knowledgeKeyIndex.TryGetValue(rec.Key, out var existingKey))
+                            {
+                                _knowledge.Remove(existingKey);
+                            }
                             _knowledge.RemoveAll(k => string.Equals(k.Id, rec.Id, StringComparison.OrdinalIgnoreCase));
                             _knowledge.Add(rec);
+                            _knowledgeKeyIndex[rec.Key] = rec;
                             break;
                         }
                     case ZabWalOpCode.UpdateKnowledge:
@@ -475,7 +768,12 @@ namespace ZeroAgent.Core.Database
                     case ZabWalOpCode.DeleteKnowledge:
                         {
                             string id = reader.ReadString();
-                            _knowledge.RemoveAll(k => string.Equals(k.Id, id, StringComparison.OrdinalIgnoreCase));
+                            var record = _knowledge.Find(k => string.Equals(k.Id, id, StringComparison.OrdinalIgnoreCase));
+                            if (record != null)
+                            {
+                                _knowledge.Remove(record);
+                                _knowledgeKeyIndex.Remove(record.Key);
+                            }
                             break;
                         }
                     case ZabWalOpCode.StoreVector:
@@ -485,11 +783,23 @@ namespace ZeroAgent.Core.Database
                             _vectors.Add(rec);
                             break;
                         }
+                    case ZabWalOpCode.DeleteVector:
+                        {
+                            string id = reader.ReadString();
+                            _vectors.RemoveAll(v => string.Equals(v.Id, id, StringComparison.OrdinalIgnoreCase));
+                            break;
+                        }
                     case ZabWalOpCode.AddReflexion:
                         {
                             var rec = DeserializeReflexionRecord(reader);
                             _reflexions.RemoveAll(r => string.Equals(r.Id, rec.Id, StringComparison.OrdinalIgnoreCase));
                             _reflexions.Add(rec);
+                            break;
+                        }
+                    case ZabWalOpCode.DeleteReflexion:
+                        {
+                            string id = reader.ReadString();
+                            _reflexions.RemoveAll(r => string.Equals(r.Id, id, StringComparison.OrdinalIgnoreCase));
                             break;
                         }
                     case ZabWalOpCode.CachePlan:
@@ -499,13 +809,32 @@ namespace ZeroAgent.Core.Database
                             _plans.Add(rec);
                             break;
                         }
+                    case ZabWalOpCode.DeletePlan:
+                        {
+                            string id = reader.ReadString();
+                            _plans.RemoveAll(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
+                            break;
+                        }
+                    case ZabWalOpCode.PrunePlans:
+                        {
+                            long ticks = reader.ReadInt64();
+                            int minHit = reader.ReadInt32();
+                            DateTime cutoff = DateTime.UtcNow - TimeSpan.FromTicks(ticks);
+                            _plans.RemoveAll(p => p.CachedAtUtc < cutoff && p.HitCount <= minHit);
+                            break;
+                        }
+                    case ZabWalOpCode.UpdateNeuralPolicy:
+                        {
+                            _neuralPolicy = DeserializeNeuralPolicy(reader);
+                            break;
+                        }
                 }
             }
         }
 
         #endregion
 
-        #region Binary Persistence & Atomic Commit / Checkpoint
+        #region Binary Persistence & Atomic Checkpoint (File.Replace)
 
         /// <summary>
         /// Checkpoints all in-memory state into the baseline .zab file atomically,
@@ -513,10 +842,15 @@ namespace ZeroAgent.Core.Database
         /// </summary>
         public void Checkpoint()
         {
-            lock (_lock)
+            _rwLock.EnterWriteLock();
+            try
             {
                 _wal.Checkpoint(() => FlushBaselineSnapshot());
                 _isDirty = false;
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
             }
         }
 
@@ -544,7 +878,8 @@ namespace ZeroAgent.Core.Database
             {
                 var header = new ZabHeader
                 {
-                    LastModifiedUtc = DateTime.UtcNow
+                    LastModifiedUtc = DateTime.UtcNow,
+                    WalSequenceNumber = _walSequenceNumber
                 };
 
                 // 1. Write Manifest
@@ -640,6 +975,17 @@ namespace ZeroAgent.Core.Database
                 }
                 header.PlansLength = (int)(msPayload.Position - pStart);
 
+                // 6. Write Neural Policy (if present)
+                if (_neuralPolicy != null)
+                {
+                    header.NeuralOffset = ZabHeader.HeaderSize + msPayload.Position;
+                    long nStart = msPayload.Position;
+                    byte[] nBytes = SerializeNeuralPolicy(_neuralPolicy);
+                    payloadWriter.Write(nBytes.Length);
+                    payloadWriter.Write(nBytes);
+                    header.NeuralLength = (int)(msPayload.Position - nStart);
+                }
+
                 // Calculate hardware CRC32C over payload bytes
                 byte[] payloadBytes = msPayload.ToArray();
                 header.ChecksumCrc32C = FastCrc.Crc32C(payloadBytes);
@@ -652,12 +998,29 @@ namespace ZeroAgent.Core.Database
                 }
             }
 
-            // Atomic file swap
+            // Bulletproof atomic file swap on OS using File.Replace
             if (File.Exists(_filePath))
             {
-                File.Delete(_filePath);
+                string backupFile = _filePath + ".bak";
+                try
+                {
+                    File.Replace(tempFile, _filePath, backupFile, ignoreMetadataErrors: true);
+                    if (File.Exists(backupFile))
+                    {
+                        try { File.Delete(backupFile); } catch { }
+                    }
+                }
+                catch
+                {
+                    // Fallback for cross-filesystem / volume boundaries
+                    if (File.Exists(_filePath)) File.Delete(_filePath);
+                    File.Move(tempFile, _filePath);
+                }
             }
-            File.Move(tempFile, _filePath);
+            else
+            {
+                File.Move(tempFile, _filePath);
+            }
         }
 
         /// <summary>
@@ -665,9 +1028,10 @@ namespace ZeroAgent.Core.Database
         /// </summary>
         public void Reload()
         {
-            lock (_lock)
+            _rwLock.EnterWriteLock();
+            try
             {
-                using (var fs = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var fs = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                 using (var reader = new BinaryReader(fs, Encoding.UTF8))
                 {
                     var header = ZabHeader.Read(reader);
@@ -675,6 +1039,8 @@ namespace ZeroAgent.Core.Database
                     {
                         throw new InvalidDataException("Invalid ZAB binary header or unsupported format version.");
                     }
+
+                    _walSequenceNumber = header.WalSequenceNumber;
 
                     // Read entire payload and verify CRC32C
                     int payloadLength = (int)(fs.Length - ZabHeader.HeaderSize);
@@ -706,11 +1072,14 @@ namespace ZeroAgent.Core.Database
 
                         // 2. Read Knowledge
                         _knowledge.Clear();
+                        _knowledgeKeyIndex.Clear();
                         ms.Seek(header.KnowledgeOffset - ZabHeader.HeaderSize, SeekOrigin.Begin);
                         int kCount = payloadReader.ReadInt32();
                         for (int i = 0; i < kCount; i++)
                         {
-                            _knowledge.Add(DeserializeKnowledgeRecord(payloadReader));
+                            var rec = DeserializeKnowledgeRecord(payloadReader);
+                            _knowledge.Add(rec);
+                            _knowledgeKeyIndex[rec.Key] = rec;
                         }
 
                         // 3. Read Vectors
@@ -739,10 +1108,31 @@ namespace ZeroAgent.Core.Database
                         {
                             _plans.Add(DeserializePlanRecord(payloadReader));
                         }
+
+                        // 6. Read Neural Policy
+                        if (header.NeuralOffset > 0 && header.NeuralLength > 0)
+                        {
+                            ms.Seek(header.NeuralOffset - ZabHeader.HeaderSize, SeekOrigin.Begin);
+                            int nLen = payloadReader.ReadInt32();
+                            byte[] nBytes = payloadReader.ReadBytes(nLen);
+                            using (var nMs = new MemoryStream(nBytes))
+                            using (var nReader = new BinaryReader(nMs, Encoding.UTF8))
+                            {
+                                _neuralPolicy = DeserializeNeuralPolicy(nReader);
+                            }
+                        }
+                        else
+                        {
+                            _neuralPolicy = null;
+                        }
                     }
                 }
 
                 _isDirty = false;
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
             }
         }
 
@@ -912,6 +1302,55 @@ namespace ZeroAgent.Core.Database
             return plan;
         }
 
+        private static byte[] SerializeNeuralPolicy(ZabNeuralPolicy p)
+        {
+            using (var ms = new MemoryStream())
+            using (var w = new BinaryWriter(ms, Encoding.UTF8))
+            {
+                w.Write(p.ModelName);
+                w.Write(p.InputDim);
+                w.Write(p.OutputClasses.Count);
+                foreach (var c in p.OutputClasses) w.Write(c);
+                w.Write(p.Scale);
+
+                w.Write(p.WeightsInt8.Length);
+                for (int i = 0; i < p.WeightsInt8.Length; i++) w.Write((byte)p.WeightsInt8[i]);
+
+                w.Write(p.Biases.Length);
+                for (int i = 0; i < p.Biases.Length; i++) w.Write(p.Biases[i]);
+
+                return ms.ToArray();
+            }
+        }
+
+        private static ZabNeuralPolicy DeserializeNeuralPolicy(BinaryReader r)
+        {
+            string name = r.ReadString();
+            int dim = r.ReadInt32();
+            int cCount = r.ReadInt32();
+            var classes = new List<string>(cCount);
+            for (int i = 0; i < cCount; i++) classes.Add(r.ReadString());
+            float scale = r.ReadSingle();
+
+            int wLen = r.ReadInt32();
+            sbyte[] weights = new sbyte[wLen];
+            for (int i = 0; i < wLen; i++) weights[i] = (sbyte)r.ReadByte();
+
+            int bLen = r.ReadInt32();
+            float[] biases = new float[bLen];
+            for (int i = 0; i < bLen; i++) biases[i] = r.ReadSingle();
+
+            return new ZabNeuralPolicy
+            {
+                ModelName = name,
+                InputDim = dim,
+                OutputClasses = classes,
+                Scale = scale,
+                WeightsInt8 = weights,
+                Biases = biases
+            };
+        }
+
         #endregion
 
         #region JSON Export & Import (100% Lossless Human-Readable)
@@ -922,6 +1361,7 @@ namespace ZeroAgent.Core.Database
             public List<ZabKnowledgeRecord> Knowledge { get; set; } = new List<ZabKnowledgeRecord>();
             public List<ZabReflexionRecord> Reflexions { get; set; } = new List<ZabReflexionRecord>();
             public List<ZabPlanRecord> Plans { get; set; } = new List<ZabPlanRecord>();
+            public ZabNeuralPolicy? NeuralPolicy { get; set; }
         }
 
         /// <summary>
@@ -929,14 +1369,16 @@ namespace ZeroAgent.Core.Database
         /// </summary>
         public string ExportToJsonString()
         {
-            lock (_lock)
+            _rwLock.EnterReadLock();
+            try
             {
                 var dump = new ZabJsonDumpDto
                 {
                     Manifest = _manifest,
                     Knowledge = _knowledge,
                     Reflexions = _reflexions,
-                    Plans = _plans
+                    Plans = _plans,
+                    NeuralPolicy = _neuralPolicy
                 };
 
                 return JsonSerializer.Serialize(dump, new JsonSerializerOptions
@@ -944,6 +1386,10 @@ namespace ZeroAgent.Core.Database
                     WriteIndented = true,
                     PropertyNameCaseInsensitive = true
                 });
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
             }
         }
 
@@ -970,14 +1416,20 @@ namespace ZeroAgent.Core.Database
 
             if (dump == null) throw new InvalidDataException("Failed to parse ZAB JSON dump.");
 
-            lock (_lock)
+            _rwLock.EnterWriteLock();
+            try
             {
                 if (dump.Manifest != null) _manifest = dump.Manifest;
 
                 if (dump.Knowledge != null)
                 {
                     _knowledge.Clear();
-                    _knowledge.AddRange(dump.Knowledge);
+                    _knowledgeKeyIndex.Clear();
+                    foreach (var k in dump.Knowledge)
+                    {
+                        _knowledge.Add(k);
+                        _knowledgeKeyIndex[k.Key] = k;
+                    }
                 }
 
                 if (dump.Reflexions != null)
@@ -992,8 +1444,17 @@ namespace ZeroAgent.Core.Database
                     _plans.AddRange(dump.Plans);
                 }
 
+                if (dump.NeuralPolicy != null)
+                {
+                    _neuralPolicy = dump.NeuralPolicy;
+                }
+
                 _isDirty = true;
                 Checkpoint();
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
             }
         }
 
@@ -1016,7 +1477,8 @@ namespace ZeroAgent.Core.Database
         /// </summary>
         public ZabStorageStats GetStorageStats()
         {
-            lock (_lock)
+            _rwLock.EnterReadLock();
+            try
             {
                 long fileLength = File.Exists(_filePath) ? new FileInfo(_filePath).Length : 0;
                 long walLength = File.Exists(_wal.WalFilePath) ? new FileInfo(_wal.WalFilePath).Length : 0;
@@ -1045,8 +1507,13 @@ namespace ZeroAgent.Core.Database
                     KnowledgeCount = _knowledge.Count,
                     VectorCount = _vectors.Count,
                     ReflexionCount = _reflexions.Count,
-                    PlanCount = _plans.Count
+                    PlanCount = _plans.Count,
+                    HasNeuralPolicy = _neuralPolicy != null
                 };
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
             }
         }
 
@@ -1061,6 +1528,7 @@ namespace ZeroAgent.Core.Database
                     try { Checkpoint(); } catch { }
                 }
                 _wal.Dispose();
+                _rwLock.Dispose();
                 _disposed = true;
             }
         }

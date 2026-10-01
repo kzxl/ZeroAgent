@@ -15,9 +15,14 @@ namespace ZeroAgent.Core.Database
         UpdateKnowledge = 2,
         DeleteKnowledge = 3,
         StoreVector = 4,
-        AddReflexion = 5,
-        CachePlan = 6,
-        Checkpoint = 7
+        DeleteVector = 5,
+        AddReflexion = 6,
+        DeleteReflexion = 7,
+        CachePlan = 8,
+        DeletePlan = 9,
+        PrunePlans = 10,
+        UpdateNeuralPolicy = 11,
+        Checkpoint = 12
     }
 
     /// <summary>

@@ -405,5 +405,160 @@ namespace ZeroAgent.Tests
                 Assert.Equal(2, dbReopened.Knowledge.Count);
             }
         }
+
+        [Fact]
+        public void ZabDatabase_NeuralPolicy_StoresWeightsAndPredictsAction()
+        {
+            string dbPath = Path.Combine(_tempDir, "neural_test.zab");
+
+            int inputDim = 4;
+            int numClasses = 3;
+            string[] classNames = new[] { "query_database", "call_external_tool", "escalate_to_human" };
+
+            // Create synthetic FP32 weights where:
+            // Class 0 fires strongly on feature 0
+            // Class 1 fires strongly on feature 1
+            // Class 2 fires strongly on feature 2
+            float[,] fp32Weights = new float[numClasses, inputDim];
+            fp32Weights[0, 0] = 5.0f;
+            fp32Weights[1, 1] = 5.0f;
+            fp32Weights[2, 2] = 5.0f;
+
+            float[] biases = new float[] { 0.1f, 0.2f, 0.3f };
+
+            var policy = new ZabNeuralPolicy("ActionPolicyNetwork", inputDim, classNames);
+            policy.SetWeightsFp32(fp32Weights, biases);
+
+            using (var db = ZabDatabase.CreateNew(dbPath))
+            {
+                db.SetNeuralPolicy(policy);
+                db.Commit();
+
+                // Test direct prediction on active database
+                float[] inputQuery = new float[] { 1.0f, 0.0f, 0.0f, 0.0f };
+                string? actionQuery = db.PredictAction(inputQuery, out float confQuery);
+                Assert.Equal("query_database", actionQuery);
+                Assert.True(confQuery > 0.8f);
+
+                float[] inputTool = new float[] { 0.0f, 1.0f, 0.0f, 0.0f };
+                string? actionTool = db.PredictAction(inputTool, out float confTool);
+                Assert.Equal("call_external_tool", actionTool);
+                Assert.True(confTool > 0.8f);
+            }
+
+            // Re-open: Verify Neural Policy persists across reboots
+            using (var dbReopened = ZabDatabase.Open(dbPath))
+            {
+                Assert.NotNull(dbReopened.NeuralPolicy);
+                Assert.Equal(inputDim, dbReopened.NeuralPolicy.InputDim);
+                Assert.Equal(numClasses, dbReopened.NeuralPolicy.OutputClasses.Count);
+                Assert.Equal("escalate_to_human", dbReopened.NeuralPolicy.OutputClasses[2]);
+
+                float[] inputEscalate = new float[] { 0.0f, 0.0f, 1.0f, 0.0f };
+                string? actionEscalate = dbReopened.PredictAction(inputEscalate, out float confEscalate);
+                Assert.Equal("escalate_to_human", actionEscalate);
+                Assert.True(confEscalate > 0.8f);
+            }
+        }
+
+        [Fact]
+        public void ZabDatabase_O1_Index_And_DeleteAPIs()
+        {
+            string dbPath = Path.Combine(_tempDir, "delete_test.zab");
+
+            string vecId;
+            string refId;
+            string planId;
+
+            using (var db = ZabDatabase.CreateNew(dbPath))
+            {
+                // Add items
+                db.AddKnowledge("machine.temperature", "75C");
+                db.AddKnowledge("machine.status", "RUNNING");
+
+                // Verify O(1) primary key lookup
+                var statusRecord = db.FindKnowledge("machine.status");
+                Assert.NotNull(statusRecord);
+                Assert.Equal("RUNNING", statusRecord.Value);
+
+                // Add Vector
+                var vecRec = db.StoreVector("Status Vector", new float[] { 1.0f, 0.0f, 0.0f });
+                vecId = vecRec.Id;
+
+                // Add Reflexion
+                var refRec = db.AddReflexion("Goal", "Fail", "Lesson");
+                refId = refRec.Id;
+
+                // Add Plan
+                var planRec = db.CachePlan("Plan Goal", "Plan Solution", 3, 0.95f, new float[] { 0.0f, 1.0f, 0.0f });
+                planId = planRec.Id;
+
+                // Test Deletions
+                bool delK = db.DeleteKnowledge("machine.temperature");
+                Assert.True(delK);
+                Assert.Null(db.FindKnowledge("machine.temperature"));
+                Assert.Single(db.Knowledge);
+
+                bool delV = db.DeleteVector(vecId);
+                Assert.True(delV);
+                Assert.Empty(db.Vectors);
+
+                bool delR = db.DeleteReflexion(refId);
+                Assert.True(delR);
+                Assert.Empty(db.Reflexions);
+
+                bool delP = db.DeletePlan(planId);
+                Assert.True(delP);
+                Assert.Empty(db.Plans);
+
+                db.Commit();
+            }
+
+            // Re-open and confirm deletions are preserved
+            using (var dbReopened = ZabDatabase.Open(dbPath))
+            {
+                Assert.Single(dbReopened.Knowledge);
+                Assert.NotNull(dbReopened.FindKnowledge("machine.status"));
+                Assert.Null(dbReopened.FindKnowledge("machine.temperature"));
+                Assert.Empty(dbReopened.Vectors);
+                Assert.Empty(dbReopened.Reflexions);
+                Assert.Empty(dbReopened.Plans);
+            }
+        }
+
+        [Fact]
+        public void ZabDatabase_PrunePlans_EvictsStaleCacheEntries()
+        {
+            string dbPath = Path.Combine(_tempDir, "prune_test.zab");
+
+            using (var db = ZabDatabase.CreateNew(dbPath))
+            {
+                var plan1 = db.CachePlan("Old Goal 1", "Sol 1", 1, 0.9f, new float[] { 0.1f, 0.2f });
+                var plan2 = db.CachePlan("Old Goal 2", "Sol 2", 2, 0.85f, new float[] { 0.2f, 0.3f });
+                var plan3 = db.CachePlan("Fresh Goal", "Sol 3", 3, 0.99f, new float[] { 0.3f, 0.4f });
+
+                // Manually simulate plan1 and plan2 created in the past
+                plan1.CachedAtUtc = DateTime.UtcNow.AddDays(-10);
+                plan2.CachedAtUtc = DateTime.UtcNow.AddDays(-5);
+                plan3.CachedAtUtc = DateTime.UtcNow;
+
+                // Prune plans older than 3 days ago
+                int evicted = db.PrunePlans(TimeSpan.FromDays(3));
+                Assert.Equal(2, evicted);
+
+                Assert.Single(db.Plans);
+                Assert.Equal("Fresh Goal", db.Plans[0].Goal);
+
+                db.Commit();
+            }
+
+            // Re-open and verify pruned state persists
+            using (var dbReopened = ZabDatabase.Open(dbPath))
+            {
+                Assert.Single(dbReopened.Plans);
+                Assert.Equal("Fresh Goal", dbReopened.Plans[0].Goal);
+            }
+        }
     }
 }
+
