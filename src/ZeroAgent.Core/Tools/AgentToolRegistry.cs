@@ -24,6 +24,8 @@ namespace ZeroAgent.Core.Tools
 
         public int Count => _tools.Count;
         public IEnumerable<IAgentTool> Tools => _tools.Values;
+        public IEnumerable<string> GetToolNames() => _tools.Keys;
+        public bool Contains(string name) => !string.IsNullOrEmpty(name) && _tools.ContainsKey(name);
 
         public void Register(IAgentTool tool)
         {

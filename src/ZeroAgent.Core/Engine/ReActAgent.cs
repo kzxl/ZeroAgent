@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using ZeroAgent.Core.Context;
 using ZeroAgent.Core.Embedding;
 using ZeroAgent.Core.Memory;
+using ZeroAgent.Core.Reasoning.Verification;
 using ZeroAgent.Core.Tools;
 using ZeroPrompt.Core.Caching;
 
@@ -33,6 +34,7 @@ namespace ZeroAgent.Core.Engine
         public ITextEmbedder? MemoryEmbedder { get; set; }
         public bool AutoRecordEpisodes { get; set; } = true;
         public float EpisodicRecallMinSimilarity { get; set; } = 0.50f;
+        public IStepCritic? StepVerifier { get; set; } = new DefaultStepVerifier();
 
         public ReActAgent(string name, string role, AgentToolRegistry tools, ILlmClient llm)
         {
@@ -84,6 +86,19 @@ namespace ZeroAgent.Core.Engine
                 // 5. Check for Action (supports ReAct syntax, JSON objects, and markdown codeblocks)
                 if (ToolCallParser.TryParseToolCall(completion, out var toolCall))
                 {
+                    if (StepVerifier != null)
+                    {
+                        var verification = await StepVerifier.VerifyStepAsync(context, completion, toolCall, Tools, cancellationToken).ConfigureAwait(false);
+                        if (!verification.IsApproved)
+                        {
+                            string observation = $"[VERIFICATION CRITIC REJECTION] {verification.FeedbackForAgent}";
+                            context.AddMessage(AgentRole.Tool, observation, toolCall.ToolName);
+                            conversation.AppendLine(completion);
+                            conversation.AppendLine($"Observation: {observation}");
+                            continue;
+                        }
+                    }
+
                     var guardStatus = loopGuard.EvaluateCall(toolCall.ToolName, toolCall.ArgumentsJson, out string guardFeedback);
 
                     if (guardStatus == LoopGuardStatus.CircuitBreak)
