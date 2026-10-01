@@ -30,6 +30,16 @@ namespace ZeroAgent.Dialog.Engine
         /// </summary>
         public Func<DialogueSession, WorkingMemory, UserProfile, string, Task<DialogResponse?>>? CognitiveEscalationHandler { get; set; }
 
+        /// <summary>
+        /// Minimum confidence score threshold for intent recognition (default: 0.35f).
+        /// </summary>
+        public float IntentConfidenceThreshold { get; set; } = 0.35f;
+
+        /// <summary>
+        /// Custom fallback message when user input does not match any intent or knowledge item.
+        /// </summary>
+        public string FallbackMessage { get; set; } = "Xin lỗi, câu hỏi của bạn nằm ngoài phạm vi hỗ trợ hoặc tôi chưa hiểu rõ yêu cầu. Vui lòng thử lại với các câu hỏi liên quan đến hệ thống.";
+
         public void SetCognitiveEscalationBridge(CognitiveEscalationBridge bridge)
         {
             if (bridge == null) throw new ArgumentNullException(nameof(bridge));
@@ -100,7 +110,7 @@ namespace ZeroAgent.Dialog.Engine
 
             // Step 4: Intent Recognition
             var (detectedIntent, score) = Dst.MatchIntent(queryEmbedding, resolvedMessage);
-            if (score < 0.25f)
+            if (score < IntentConfidenceThreshold)
             {
                 detectedIntent = null;
             }
@@ -159,8 +169,8 @@ namespace ZeroAgent.Dialog.Engine
                 return new DialogResponse(faqAnswer, SessionState.Idle, intentName: "KNOWLEDGE_RETRIEVAL", confidence: fallbackFaq[0].Similarity);
             }
 
-            // Step 9: Fallback
-            string fallback = "Xin lỗi, tôi chưa hiểu rõ yêu cầu. Bạn có thể hỏi về nhiệt độ, áp suất máy, kiểm tra PLC, hoặc tra cứu quy trình sự cố.";
+            // Step 9: Fallback (Out-of-Domain or Unmatched)
+            string fallback = FallbackMessage ?? "Xin lỗi, tôi chưa hiểu rõ yêu cầu. Vui lòng đặt câu hỏi liên quan đến hệ thống.";
             workingMemory.AddTurn(userMessage, fallback, "FALLBACK");
             return new DialogResponse(fallback, SessionState.Idle, null, session.Slots, false, 0.0f);
         }
