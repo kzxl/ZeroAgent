@@ -1,58 +1,47 @@
 using System;
-using ZeroNeural.Core.Autograd;
-using ZeroNeural.Core.nn;
-using ZeroTensor.Core;
-using ZeroVector.Core.Metrics;
 
 namespace ZeroAgent.Dialog.Neural
 {
     /// <summary>
-    /// Projects 128-dimensional sparse lexical embeddings into a dense non-linear latent space (e.g. 64-d).
+    /// Projects sparse lexical embeddings into a dense non-linear latent space (e.g. 64-d)
+    /// powered by an underlying 5-layer Deep Residual Vector Projector with LayerNorm and Skip Connections.
+    /// Fully backward-compatible while upgrading the internal representation to deep non-linear manifolds.
     /// </summary>
     public sealed class NeuralDenseProjector
     {
-        private readonly Sequential _projectionNet;
-        public int InputDim { get; }
-        public int OutputDim { get; }
+        private readonly DeepResidualVectorProjector _projector;
+
+        public int InputDim => _projector.InputDim;
+        public int OutputDim => _projector.OutputDim;
+        public int HiddenDim => _projector.HiddenDim;
+        public int LayerCount => _projector.LayerCount;
+
+        public DeepResidualVectorProjector DeepProjector => _projector;
 
         public NeuralDenseProjector(int inputDim = 128, int outputDim = 64, int seed = 42)
+            : this(inputDim, outputDim, Math.Max(inputDim, outputDim * 2), seed)
         {
-            if (inputDim <= 0) throw new ArgumentOutOfRangeException(nameof(inputDim));
-            if (outputDim <= 0) throw new ArgumentOutOfRangeException(nameof(outputDim));
+        }
 
-            InputDim = inputDim;
-            OutputDim = outputDim;
-
-            _projectionNet = new Sequential(
-                new Linear(inputDim, outputDim, seed: seed),
-                new Tanh()
-            );
-            _projectionNet.Eval();
+        public NeuralDenseProjector(int inputDim, int outputDim, int hiddenDim, int seed = 42)
+        {
+            _projector = new DeepResidualVectorProjector(inputDim, outputDim, hiddenDim, seed: seed);
         }
 
         /// <summary>
-        /// Projects an input 128-d embedding into an L2-normalized 64-d dense vector.
+        /// Projects an input sparse embedding into an L2-normalized dense latent vector.
         /// </summary>
         public float[] Project(ReadOnlySpan<float> inputEmbedding)
         {
-            if (inputEmbedding.Length != InputDim)
-            {
-                throw new ArgumentException($"Input embedding length {inputEmbedding.Length} must match InputDim {InputDim}.", nameof(inputEmbedding));
-            }
+            return _projector.Project(inputEmbedding);
+        }
 
-            var xTensor = Tensor.FromArray(inputEmbedding.ToArray(), 1, InputDim);
-            var xVar = new Variable(xTensor, requiresGrad: false);
-
-            var outVar = _projectionNet.Forward(xVar);
-
-            float[] result = new float[OutputDim];
-            for (int i = 0; i < OutputDim; i++)
-            {
-                result[i] = outVar.Data[0, i];
-            }
-
-            VectorMetrics.NormalizeL2(result);
-            return result;
+        /// <summary>
+        /// Zero-allocation projection directly into destination span.
+        /// </summary>
+        public void Project(ReadOnlySpan<float> inputEmbedding, Span<float> destination)
+        {
+            _projector.Project(inputEmbedding, destination);
         }
     }
 }
