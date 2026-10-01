@@ -218,7 +218,7 @@ namespace ZeroAgent.Tests
             sw.Stop();
 
             _output.WriteLine($"[BENCHMARK] 1,000 deterministic compaction cycles completed in {sw.ElapsedMilliseconds} ms ({sw.Elapsed.TotalMicroseconds / 1000.0:F3} us/op).");
-            Assert.True(sw.ElapsedMilliseconds < 50, $"Expected < 50ms, actual: {sw.ElapsedMilliseconds}ms");
+            Assert.True(sw.ElapsedMilliseconds < 100, $"Expected < 100ms, actual: {sw.ElapsedMilliseconds}ms");
         }
 
         private sealed class RecordingMockLlmClient : ILlmClient

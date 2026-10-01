@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using ZeroAgent.Core.Context;
 using ZeroAgent.Core.Engine;
+using ZeroAgent.Core.Reasoning.TreeOfThought;
 using ZeroAgent.Dialog.DST;
 using ZeroAgent.Dialog.Memory;
 
@@ -9,19 +10,21 @@ namespace ZeroAgent.Dialog.Engine
 {
     /// <summary>
     /// Two-Tier Cognitive Escalation Bridge.
-    /// Bridges Tier 1 (Sub-millisecond Reflex NLU) to Tier 2 (Generative Deliberation ReAct Agent).
+    /// Bridges Tier 1 (Sub-millisecond Reflex NLU) to Tier 2 (Generative Deliberation ReAct / Tree-of-Thought Agent).
     /// When Tier 1 confidence is insufficient or an open-ended multi-step query is detected,
-    /// packages active working memory and delegates reasoning to ReActAgent.
+    /// packages active working memory and delegates reasoning to ReActAgent or TreeOfThoughtAgent.
     /// </summary>
     public sealed class CognitiveEscalationBridge
     {
         private readonly ReActAgent _reActAgent;
 
         public ReActAgent ReActAgent => _reActAgent;
+        public TreeOfThoughtAgent? ToTAgent { get; set; }
 
-        public CognitiveEscalationBridge(ReActAgent reActAgent)
+        public CognitiveEscalationBridge(ReActAgent reActAgent, TreeOfThoughtAgent? toTAgent = null)
         {
             _reActAgent = reActAgent ?? throw new ArgumentNullException(nameof(reActAgent));
+            ToTAgent = toTAgent;
         }
 
         public async Task<DialogResponse?> EscalateAsync(
@@ -64,21 +67,39 @@ namespace ZeroAgent.Dialog.Engine
                 context.AddMessage(AgentRole.Assistant, turns[i].BotResponse);
             }
 
-            // 3. Execute deliberation loop via ReActAgent
-            var agentResponse = await _reActAgent.ExecuteAsync(context).ConfigureAwait(false);
+            // 3. Execute deliberation loop via ToTAgent (if deep RCA query) or ReActAgent
+            bool isDeepRca = ToTAgent != null && (
+                query.IndexOf("nguyên nhân gốc rễ", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                query.IndexOf("root cause", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                query.IndexOf("đa kịch bản", StringComparison.OrdinalIgnoreCase) >= 0);
+
+            AgentResponse agentResponse;
+            string intentName;
+
+            if (isDeepRca && ToTAgent != null)
+            {
+                agentResponse = await ToTAgent.ExecuteAsync(context).ConfigureAwait(false);
+                intentName = "COGNITIVE_DELIBERATION_TOT";
+            }
+            else
+            {
+                agentResponse = await _reActAgent.ExecuteAsync(context).ConfigureAwait(false);
+                intentName = "COGNITIVE_DELIBERATION_REACT";
+            }
+
             if (agentResponse.Success)
             {
                 session.State = SessionState.Completed;
                 return new DialogResponse(
                     agentResponse.Output,
                     SessionState.Completed,
-                    "COGNITIVE_DELIBERATION_REACT",
+                    intentName,
                     session.Slots,
                     isActionExecuted: agentResponse.TotalSteps > 1,
                     confidence: 0.95f);
             }
 
-            return null; // Allow fallback if ReAct was unable to complete
+            return null; // Allow fallback if deliberation was unable to complete
         }
     }
 }
