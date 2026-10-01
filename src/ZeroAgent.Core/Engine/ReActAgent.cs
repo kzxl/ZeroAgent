@@ -52,13 +52,23 @@ namespace ZeroAgent.Core.Engine
             Llm = llm ?? throw new ArgumentNullException(nameof(llm));
         }
 
-        public async Task<AgentResponse> ExecuteAsync(AgentContext context, CancellationToken cancellationToken = default)
+        public Task<AgentResponse> ExecuteAsync(AgentContext context, CancellationToken cancellationToken = default)
+        {
+            return ExecuteAsync(context, onEvent: null, cancellationToken);
+        }
+
+        public async Task<AgentResponse> ExecuteAsync(
+            AgentContext context, 
+            Action<AgentStreamEvent>? onEvent, 
+            CancellationToken cancellationToken = default)
         {
             if (context == null) throw new ArgumentNullException(nameof(context));
 
             var sw = Stopwatch.StartNew();
             int currentStep = 0;
             var loopGuard = CreateLoopGuard();
+
+            onEvent?.Invoke(AgentStreamEvent.Started(context.Goal, sw.Elapsed));
 
             var conversation = new StringBuilder();
 
@@ -79,6 +89,7 @@ namespace ZeroAgent.Core.Engine
                 // 3. Query LLM
                 string completion = await Llm.CompleteAsync(prompt, cancellationToken).ConfigureAwait(false);
                 context.AddMessage(AgentRole.Assistant, completion);
+                onEvent?.Invoke(AgentStreamEvent.Thought(completion, currentStep, sw.Elapsed));
 
                 // 4. Check for Final Answer
                 if (ToolCallParser.TryParseFinalAnswer(completion, out string answer))
@@ -88,12 +99,15 @@ namespace ZeroAgent.Core.Engine
                     {
                         EpisodicMemory.Remember($"Goal: {context.Goal} => Solution: {answer.Trim()}", MemoryEmbedder);
                     }
+                    onEvent?.Invoke(AgentStreamEvent.Completed(answer.Trim(), currentStep, sw.Elapsed));
                     return AgentResponse.Succeeded(answer, currentStep, sw.Elapsed, context.History);
                 }
 
                 // 5. Check for Action (supports ReAct syntax, JSON objects, and markdown codeblocks)
                 if (ToolCallParser.TryParseToolCall(completion, out var toolCall))
                 {
+                    onEvent?.Invoke(AgentStreamEvent.ToolCall(toolCall.ToolName, toolCall.ArgumentsJson, currentStep, sw.Elapsed));
+
                     if (StepVerifier != null)
                     {
                         var verification = await StepVerifier.VerifyStepAsync(context, completion, toolCall, Tools, cancellationToken).ConfigureAwait(false);
@@ -103,7 +117,12 @@ namespace ZeroAgent.Core.Engine
                             context.AddMessage(AgentRole.Tool, observation, toolCall.ToolName);
                             conversation.AppendLine(completion);
                             conversation.AppendLine($"Observation: {observation}");
+                            onEvent?.Invoke(AgentStreamEvent.Rejected(verification.FeedbackForAgent, currentStep, sw.Elapsed));
                             continue;
+                        }
+                        else
+                        {
+                            onEvent?.Invoke(AgentStreamEvent.Verified("Step approved by critic", currentStep, sw.Elapsed));
                         }
                     }
 
@@ -116,6 +135,7 @@ namespace ZeroAgent.Core.Engine
                         context.AddMessage(AgentRole.Tool, observation, toolCall.ToolName);
                         conversation.AppendLine(completion);
                         conversation.AppendLine($"Observation: {observation}");
+                        onEvent?.Invoke(AgentStreamEvent.CircuitBreak(guardFeedback, currentStep, sw.Elapsed));
                     }
                     else
                     {
@@ -142,6 +162,7 @@ namespace ZeroAgent.Core.Engine
 
                         conversation.AppendLine(completion);
                         conversation.AppendLine($"Observation: {observation}");
+                        onEvent?.Invoke(AgentStreamEvent.ToolDone(toolCall.ToolName, observation, currentStep, sw.Elapsed));
                     }
                 }
                 else
@@ -152,12 +173,15 @@ namespace ZeroAgent.Core.Engine
                     {
                         EpisodicMemory.Remember($"Goal: {context.Goal} => Solution: {completion.Trim()}", MemoryEmbedder);
                     }
+                    onEvent?.Invoke(AgentStreamEvent.Completed(completion.Trim(), currentStep, sw.Elapsed));
                     return AgentResponse.Succeeded(completion.Trim(), currentStep, sw.Elapsed, context.History);
                 }
             }
 
             sw.Stop();
-            return AgentResponse.Failed($"Agent exceeded maximum step limit ({context.MaxSteps}) without reaching a final answer.", currentStep, sw.Elapsed, context.History);
+            string maxStepErr = $"Agent exceeded maximum step limit ({context.MaxSteps}) without reaching a final answer.";
+            onEvent?.Invoke(AgentStreamEvent.Failed(maxStepErr, currentStep, sw.Elapsed));
+            return AgentResponse.Failed(maxStepErr, currentStep, sw.Elapsed, context.History);
         }
 
         private string BuildPrompt(AgentContext context, string trajectory)
