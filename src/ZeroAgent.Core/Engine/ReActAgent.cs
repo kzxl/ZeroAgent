@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using ZeroAgent.Core.Context;
 using ZeroAgent.Core.Embedding;
 using ZeroAgent.Core.Memory;
+using ZeroAgent.Core.Reasoning;
 using ZeroAgent.Core.Reasoning.Verification;
 using ZeroAgent.Core.Tools;
 using ZeroPrompt.Core.Caching;
@@ -35,6 +36,13 @@ namespace ZeroAgent.Core.Engine
         public bool AutoRecordEpisodes { get; set; } = true;
         public float EpisodicRecallMinSimilarity { get; set; } = 0.50f;
         public IStepCritic? StepVerifier { get; set; } = new DefaultStepVerifier();
+        public ReasoningStyle ReasoningStyle { get; set; } = ReasoningStyle.DetailedCoT;
+
+        public ReActAgent WithReasoningStyle(ReasoningStyle style)
+        {
+            ReasoningStyle = style;
+            return this;
+        }
 
         public ReActAgent(string name, string role, AgentToolRegistry tools, ILlmClient llm)
         {
@@ -157,15 +165,45 @@ namespace ZeroAgent.Core.Engine
             var optimizer = new PromptLayoutOptimizer();
 
             // 1. Static System Instruction
-            string systemInstruction = $"You are {Name}, an autonomous cognitive agent acting as a {Role}.\n" +
-                "Use the following format:\n" +
-                "Goal: the user prompt to accomplish\n" +
-                "Thought: you should always think about what to do\n" +
-                "Action: the action to take, should be one of the tools: ToolName(argument)\n" +
-                "Observation: the result of the action\n" +
-                "... (this Thought/Action/Observation can repeat)\n" +
-                "Thought: I now have the final answer\n" +
-                "Final Answer: the final answer to the original input question";
+            string systemInstruction;
+            if (ReasoningStyle == ReasoningStyle.ChainOfDraft)
+            {
+                systemInstruction = $"You are {Name}, an autonomous cognitive agent acting as a {Role}.\n" +
+                    "[REASONING STYLE: CHAIN-OF-DRAFT]\n" +
+                    "Keep thoughts ultra-concise, telegraphic, and under 30 words. Focus strictly on the immediate next action without verbose filler.\n" +
+                    "Use the following format:\n" +
+                    "Goal: the user prompt to accomplish\n" +
+                    "Thought: concise telegraphic draft (< 30 words)\n" +
+                    "Action: the action to take, should be one of the tools: ToolName(argument)\n" +
+                    "Observation: the result of the action\n" +
+                    "... (this Thought/Action/Observation can repeat)\n" +
+                    "Thought: concise final justification\n" +
+                    "Final Answer: concise, authoritative final answer";
+            }
+            else if (ReasoningStyle == ReasoningStyle.SilentAction)
+            {
+                systemInstruction = $"You are {Name}, an autonomous cognitive agent acting as a {Role}.\n" +
+                    "[REASONING STYLE: DIRECT ACTION]\n" +
+                    "Proceed directly to action formulation without conversational delay.\n" +
+                    "Use the following format:\n" +
+                    "Goal: the user prompt to accomplish\n" +
+                    "Action: the action to take, should be one of the tools: ToolName(argument)\n" +
+                    "Observation: the result of the action\n" +
+                    "... (repeat as necessary)\n" +
+                    "Final Answer: direct final answer";
+            }
+            else
+            {
+                systemInstruction = $"You are {Name}, an autonomous cognitive agent acting as a {Role}.\n" +
+                    "Use the following format:\n" +
+                    "Goal: the user prompt to accomplish\n" +
+                    "Thought: you should always think about what to do\n" +
+                    "Action: the action to take, should be one of the tools: ToolName(argument)\n" +
+                    "Observation: the result of the action\n" +
+                    "... (this Thought/Action/Observation can repeat)\n" +
+                    "Thought: I now have the final answer\n" +
+                    "Final Answer: the final answer to the original input question";
+            }
 
             optimizer.AddSystem(systemInstruction, "react_system_instruction");
 
@@ -246,7 +284,9 @@ namespace ZeroAgent.Core.Engine
             }
 
             var layout = optimizer.Optimize();
-            return layout.FullPrompt + "\nThought: ";
+            return ReasoningStyle == ReasoningStyle.SilentAction
+                ? layout.FullPrompt + "\nAction: "
+                : layout.FullPrompt + "\nThought: ";
         }
     }
 }
