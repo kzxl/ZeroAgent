@@ -151,21 +151,36 @@ namespace ZeroAgent.Core.Tools
         }
 
         /// <summary>
-        /// Generates a markdown description of available tools for injection into the agent's system prompt.
+        /// Formats a single tool definition for prompt injection.
         /// </summary>
-        public string GetToolsPrompt()
+        public static string FormatToolPrompt(IAgentTool tool)
         {
-            if (_tools.Count == 0) return "No external tools available.";
+            if (tool == null) return string.Empty;
+            string sensitiveFlag = tool.RequiresApproval ? " [REQUIRES OPERATOR APPROVAL]" : string.Empty;
+            return $"- `{tool.Name}`({tool.ParameterSignature}): {tool.Description}{sensitiveFlag}";
+        }
 
+        /// <summary>
+        /// Formats a collection of tool definitions for prompt injection.
+        /// </summary>
+        public static string FormatToolsPrompt(IEnumerable<IAgentTool> tools)
+        {
+            if (tools == null) return "No external tools available.";
             var sb = new StringBuilder();
             sb.AppendLine("You have access to the following tools:");
-            foreach (var tool in _tools.Values)
+            int count = 0;
+            foreach (var tool in tools)
             {
-                string sensitiveFlag = tool.RequiresApproval ? " [REQUIRES OPERATOR APPROVAL]" : string.Empty;
-                sb.AppendLine($"- `{tool.Name}`({tool.ParameterSignature}): {tool.Description}{sensitiveFlag}");
+                sb.AppendLine(FormatToolPrompt(tool));
+                count++;
             }
-            return sb.ToString();
+            return count == 0 ? "No external tools available." : sb.ToString();
         }
+
+        /// <summary>
+        /// Generates a markdown description of available tools for injection into the agent's system prompt.
+        /// </summary>
+        public string GetToolsPrompt() => FormatToolsPrompt(_tools.Values);
 
         /// <summary>
         /// Generates an OpenAI-compatible JSON Schema definition for all registered tools.

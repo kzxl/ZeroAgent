@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -23,6 +25,8 @@ namespace ZeroAgent.Core.Engine
         public ContextBudgetManager BudgetManager { get; set; } = new ContextBudgetManager();
         public int MaxContextTokens { get; set; } = 4096;
         public Func<ReActLoopGuard> CreateLoopGuard { get; set; } = () => new ReActLoopGuard();
+        public ToolSemanticRouter? ToolRouter { get; set; }
+        public int MaxPromptTools { get; set; } = 0;
 
         public ReActAgent(string name, string role, AgentToolRegistry tools, ILlmClient llm)
         {
@@ -149,8 +153,20 @@ namespace ZeroAgent.Core.Engine
                 }
             }
 
-            // 2. Static Tool Definitions
-            optimizer.AddTools(Tools.GetToolsPrompt(), "react_tool_definitions");
+            // 2. Tool Definitions (optionally routed to prune context)
+            string toolsPrompt;
+            if (ToolRouter != null && MaxPromptTools > 0 && Tools.Count > MaxPromptTools)
+            {
+                var relevantTools = ToolRouter.Route(context?.Goal ?? string.Empty, topK: MaxPromptTools);
+                toolsPrompt = relevantTools.Count > 0
+                    ? AgentToolRegistry.FormatToolsPrompt(relevantTools.Select(r => r.Tool))
+                    : Tools.GetToolsPrompt();
+            }
+            else
+            {
+                toolsPrompt = Tools.GetToolsPrompt();
+            }
+            optimizer.AddTools(toolsPrompt, "react_tool_definitions");
 
             // 3. Prior Dialogue History
             if (context != null)
