@@ -34,6 +34,6 @@
     <PackageReference Include="ZeroData.Sql" Version="1.4.0" Condition="!Exists('..\..\..\ZeroData\src\ZeroData.Sql\ZeroData.Sql.csproj')" />
 
     <ProjectReference Include="..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj" Condition="Exists('..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj')" />
-    <PackageReference Include="ZeroVector.Core" Version="1.0.0" Condition="!Exists('..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj')" />
+    <PackageReference Include="ZeroVector.Core" Version="1.1.0" Condition="!Exists('..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj')" />
   </ItemGroup>
 </Project>

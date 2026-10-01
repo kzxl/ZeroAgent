@@ -23,7 +23,7 @@
     <PackageReference Include="ZeroConcurrency" Version="1.4.0" Condition="!Exists('..\..\..\ZeroConcurrency\src\ZeroConcurrency\ZeroConcurrency.csproj')" />
 
     <ProjectReference Include="..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj" Condition="Exists('..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj')" />
-    <PackageReference Include="ZeroVector.Core" Version="1.0.0" Condition="!Exists('..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj')" />
+    <PackageReference Include="ZeroVector.Core" Version="1.1.0" Condition="!Exists('..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj')" />
 
     <ProjectReference Include="..\..\..\ZeroTokenizer\src\ZeroTokenizer.Core\ZeroTokenizer.Core.csproj" Condition="Exists('..\..\..\ZeroTokenizer\src\ZeroTokenizer.Core\ZeroTokenizer.Core.csproj')" />
     <PackageReference Include="ZeroTokenizer.Core" Version="1.0.0" Condition="!Exists('..\..\..\ZeroTokenizer\src\ZeroTokenizer.Core\ZeroTokenizer.Core.csproj')" />
