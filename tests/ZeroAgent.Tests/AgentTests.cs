@@ -180,5 +180,111 @@ namespace ZeroAgent.Tests
             Assert.Contains("\"address\":{\"type\":\"number\"}", jsonSchema);
             Assert.Contains("\"required\":[\"address\"]", jsonSchema);
         }
+
+        [Fact]
+        public void ReActLoopGuard_DetectsConsecutiveDuplicatesAndCircuitBreaks()
+        {
+            var guard = new ReActLoopGuard { MaxConsecutiveDuplicates = 2, MaxTotalDuplicates = 3 };
+
+            // Call 1: First time -> Allow
+            var status1 = guard.EvaluateCall("ReadSensor", "Temp1", out string fb1);
+            Assert.Equal(LoopGuardStatus.Allow, status1);
+            Assert.Empty(fb1);
+
+            // Call 2: Duplicate consecutive -> CircuitBreak (since maxConsecutive=2)
+            var status2 = guard.EvaluateCall("ReadSensor", "Temp1", out string fb2);
+            Assert.Equal(LoopGuardStatus.CircuitBreak, status2);
+            Assert.Contains("CIRCUIT BREAKER TRIGGERED", fb2);
+        }
+
+        [Fact]
+        public async Task ReActAgent_LoopGuard_PreventsInfiniteDuplicateToolExecution()
+        {
+            int toolExecutionCount = 0;
+            var registry = new AgentToolRegistry();
+            registry.Register("FetchTelemetry", "Fetches telemetry.", (string arg) =>
+            {
+                toolExecutionCount++;
+                return "Val: 100";
+            });
+
+            var mockLlm = new MockLlmClient();
+            // Step 1: Tool call
+            mockLlm.Enqueue("Action: FetchTelemetry(Pressure1)");
+            // Step 2: Exact same tool call (agent hallucinates/repeats)
+            mockLlm.Enqueue("Action: FetchTelemetry(Pressure1)");
+            // Step 3: Agent sees circuit breaker and provides answer
+            mockLlm.Enqueue("I see the circuit breaker. Final Answer: Pressure is 100.");
+
+            var agent = new ReActAgent("GuardTestAgent", "Tester", registry, mockLlm);
+            var context = new AgentContext("Check pressure", maxSteps: 5);
+
+            var response = await agent.ExecuteAsync(context);
+
+            Assert.True(response.Success);
+            Assert.Equal("Pressure is 100.", response.Output);
+            // Tool should only execute ONCE because the second identical call is blocked by circuit breaker
+            Assert.Equal(1, toolExecutionCount);
+        }
+
+        [Fact]
+        public async Task ReActAgent_InjectsSelfCorrectionDirectiveOnToolError()
+        {
+            var registry = new AgentToolRegistry();
+            registry.Register("FaultyTool", "A tool that throws.", new Func<string, string>((string arg) =>
+            {
+                throw new InvalidOperationException("Sensor hardware offline");
+            }));
+
+            var mockLlm = new MockLlmClient();
+            mockLlm.Enqueue("Action: FaultyTool(Pump1)");
+            mockLlm.Enqueue("Final Answer: Sensor was offline so I halted.");
+
+            var agent = new ReActAgent("ReflectAgent", "Tester", registry, mockLlm);
+            var context = new AgentContext("Diagnose pump", maxSteps: 5);
+
+            var response = await agent.ExecuteAsync(context);
+
+            Assert.True(response.Success);
+            // Verify context history contains the self-correction directive
+            var toolMessage = context.History.Find(m => m.Role == AgentRole.Tool);
+            Assert.NotNull(toolMessage);
+            Assert.Contains("SELF-CORRECTION DIRECTIVE", toolMessage.Content);
+            Assert.Contains("Sensor hardware offline", toolMessage.Content);
+        }
+
+        [Fact]
+        public async Task ReActAgent_EnforcesContextBudgetPruning()
+        {
+            var registry = new AgentToolRegistry();
+            registry.Register("QuickTool", "Sample tool.", (string arg) => "Sample Result");
+
+            var mockLlm = new MockLlmClient();
+            mockLlm.Enqueue("Action: QuickTool(1)");
+            mockLlm.Enqueue("Final Answer: Done");
+
+            var agent = new ReActAgent("BudgetAgent", "Tester", registry, mockLlm)
+            {
+                MaxContextTokens = 50 // Very small budget to force pruning
+            };
+
+            var context = new AgentContext("Small budget goal", maxSteps: 5);
+            // Pre-seed context with large historical messages
+            for (int i = 0; i < 15; i++)
+            {
+                context.AddMessage(AgentRole.User, $"This is a lengthy prior conversation turn {i} that consumes tokens.");
+                context.AddMessage(AgentRole.Assistant, $"This is a lengthy prior assistant response {i} that also consumes tokens.");
+            }
+
+            int initialTokens = agent.BudgetManager.EstimateContextTokens(context);
+            Assert.True(initialTokens > 100);
+
+            var response = await agent.ExecuteAsync(context);
+
+            Assert.True(response.Success);
+            int finalTokens = agent.BudgetManager.EstimateContextTokens(context);
+            // Tokens should have been pruned to stay within bounded budget
+            Assert.True(finalTokens <= 50 || context.History.Count < 10);
+        }
     }
 }

@@ -70,7 +70,7 @@ namespace ZeroAgent.Core.Tools
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                string result = await ExecuteAsync(request.ArgumentsJson).ConfigureAwait(false);
+                string result = await Invoker(request.ArgumentsJson).ConfigureAwait(false);
                 sw.Stop();
                 return ToolCallResponse.CreateSuccess(request.CallId, Name, result, sw.Elapsed);
             }

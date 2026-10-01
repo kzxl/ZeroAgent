@@ -20,6 +20,9 @@ namespace ZeroAgent.Core.Engine
         public string Role { get; }
         public AgentToolRegistry Tools { get; }
         public ILlmClient Llm { get; }
+        public ContextBudgetManager BudgetManager { get; set; } = new ContextBudgetManager();
+        public int MaxContextTokens { get; set; } = 4096;
+        public Func<ReActLoopGuard> CreateLoopGuard { get; set; } = () => new ReActLoopGuard();
 
         public ReActAgent(string name, string role, AgentToolRegistry tools, ILlmClient llm)
         {
@@ -35,39 +38,74 @@ namespace ZeroAgent.Core.Engine
 
             var sw = Stopwatch.StartNew();
             int currentStep = 0;
+            var loopGuard = CreateLoopGuard();
 
             var conversation = new StringBuilder();
-            conversation.AppendLine($"User Goal: {context.Goal}");
 
             while (currentStep < context.MaxSteps)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 currentStep++;
 
-                // 1. Build prompt
+                // 1. Budget enforcement on context history
+                if (BudgetManager != null && MaxContextTokens > 0)
+                {
+                    BudgetManager.PruneContextToBudget(context, MaxContextTokens);
+                }
+
+                // 2. Build prompt
                 string prompt = BuildPrompt(context, conversation.ToString());
 
-                // 2. Query LLM
+                // 3. Query LLM
                 string completion = await Llm.CompleteAsync(prompt, cancellationToken).ConfigureAwait(false);
                 context.AddMessage(AgentRole.Assistant, completion);
 
-                // 3. Check for Final Answer
+                // 4. Check for Final Answer
                 if (ToolCallParser.TryParseFinalAnswer(completion, out string answer))
                 {
                     sw.Stop();
                     return AgentResponse.Succeeded(answer, currentStep, sw.Elapsed, context.History);
                 }
 
-                // 4. Check for Action (supports ReAct syntax, JSON objects, and markdown codeblocks)
+                // 5. Check for Action (supports ReAct syntax, JSON objects, and markdown codeblocks)
                 if (ToolCallParser.TryParseToolCall(completion, out var toolCall))
                 {
-                    var response = await Tools.ExecuteCallAsync(toolCall).ConfigureAwait(false);
-                    string rawObservation = response.Success ? response.Content : $"Error: {response.ErrorMessage}";
-                    string observation = ObservationCompactor.Compact(toolCall.ToolName, rawObservation);
-                    context.AddMessage(AgentRole.Tool, observation, toolCall.ToolName);
+                    var guardStatus = loopGuard.EvaluateCall(toolCall.ToolName, toolCall.ArgumentsJson, out string guardFeedback);
 
-                    conversation.AppendLine(completion);
-                    conversation.AppendLine($"Observation: {observation}");
+                    if (guardStatus == LoopGuardStatus.CircuitBreak)
+                    {
+                        // Circuit breaker triggered: block duplicate execution and inject instruction
+                        string observation = guardFeedback;
+                        context.AddMessage(AgentRole.Tool, observation, toolCall.ToolName);
+                        conversation.AppendLine(completion);
+                        conversation.AppendLine($"Observation: {observation}");
+                    }
+                    else
+                    {
+                        var response = await Tools.ExecuteCallAsync(toolCall).ConfigureAwait(false);
+                        string rawObservation;
+                        if (response.Success && (response.Content == null || !response.Content.StartsWith("Tool execution failed with error:")))
+                        {
+                            rawObservation = response.Content ?? string.Empty;
+                            if (guardStatus == LoopGuardStatus.WarnAndReflect && !string.IsNullOrEmpty(guardFeedback))
+                            {
+                                rawObservation += $"\n{guardFeedback}";
+                            }
+                        }
+                        else
+                        {
+                            string err = (!response.Success && !string.IsNullOrEmpty(response.ErrorMessage))
+                                ? response.ErrorMessage
+                                : response.Content;
+                            rawObservation = $"Error: {err}\n[SELF-CORRECTION DIRECTIVE] The tool execution encountered an error. Reflect on why the error occurred, inspect the argument format, or select an alternate tool.";
+                        }
+
+                        string observation = ObservationCompactor.Compact(toolCall.ToolName, rawObservation);
+                        context.AddMessage(AgentRole.Tool, observation, toolCall.ToolName);
+
+                        conversation.AppendLine(completion);
+                        conversation.AppendLine($"Observation: {observation}");
+                    }
                 }
                 else
                 {

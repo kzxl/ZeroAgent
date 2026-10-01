@@ -93,6 +93,9 @@ namespace ZeroAgent.Dialog
                     "dừng",
                     "dừng ngay",
                     "dừng hoạt động",
+                    "tắt máy",
+                    "tắt thiết bị",
+                    "tat may",
                     "stop machine")
                 .RequireSlot("machine_id", "Bạn muốn yêu cầu dừng thiết bị nào?")
                 .AddTemplates(
