@@ -36,6 +36,8 @@ jobs:
       - name: Pack Packages
         run: |
           dotnet pack src/ZeroAgent.Core/ZeroAgent.Core.csproj -c Release -o nupkgs
+          dotnet pack src/ZeroAgent.Dialog/ZeroAgent.Dialog.csproj -c Release -o nupkgs
+          dotnet pack src/ZeroAgent.Tools/ZeroAgent.Tools.csproj -c Release -o nupkgs
 
       # 1. Push to GitHub Packages
       - name: Push to GitHub Packages
