@@ -8,7 +8,7 @@ namespace ZeroAgent.Dialog.Engine
     {
         public DialogueSession GetOrCreateSession(string sessionId)
         {
-            return _sessions.GetOrAdd(sessionId, id => new DialogueSession(id));
+            return Sessions.GetOrCreate(sessionId);
         }
 
         /// <summary>
@@ -67,7 +67,7 @@ namespace ZeroAgent.Dialog.Engine
         /// </summary>
         public void ClearSession(string sessionId)
         {
-            _sessions.TryRemove(sessionId, out _);
+            Sessions.Remove(sessionId);
             Memory.GetWorkingMemory(sessionId).Clear();
         }
     }

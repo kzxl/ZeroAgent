@@ -141,5 +141,26 @@ namespace ZeroAgent.Dialog.Memory
         }
 
         public int Count => _profiles.Count;
+
+        /// <summary>
+        /// Evicts inactive guest profiles to prevent memory exhaustion (DoS mitigation).
+        /// Registered enterprise users are permanently preserved.
+        /// </summary>
+        public int PruneStaleGuestProfiles(TimeSpan maxInactiveAge)
+        {
+            var cutoff = DateTime.UtcNow - maxInactiveAge;
+            int evicted = 0;
+            foreach (var kvp in _profiles)
+            {
+                if (kvp.Value.IsGuest && kvp.Value.Persona.LastUpdatedUtc < cutoff)
+                {
+                    if (_profiles.TryRemove(kvp.Key, out _))
+                    {
+                        evicted++;
+                    }
+                }
+            }
+            return evicted;
+        }
     }
 }

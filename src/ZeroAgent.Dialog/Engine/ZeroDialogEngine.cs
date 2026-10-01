@@ -17,8 +17,7 @@ namespace ZeroAgent.Dialog.Engine
     /// </summary>
     public sealed partial class ZeroDialogEngine
     {
-        private readonly ConcurrentDictionary<string, DialogueSession> _sessions = new ConcurrentDictionary<string, DialogueSession>(StringComparer.OrdinalIgnoreCase);
-
+        public IDialogSessionStore Sessions { get; }
         public AgenticMemoryEngine Memory { get; }
         public DialogueStateTracker Dst { get; }
         public AgentToolRegistry Tools { get; }
@@ -37,12 +36,17 @@ namespace ZeroAgent.Dialog.Engine
             CognitiveEscalationHandler = bridge.EscalateAsync;
         }
 
-        public ZeroDialogEngine(AgentToolRegistry? tools = null, HitlSafetyGate? safetyGate = null, int dimension = 128)
+        public ZeroDialogEngine(
+            AgentToolRegistry? tools = null, 
+            HitlSafetyGate? safetyGate = null, 
+            int dimension = 128,
+            IDialogSessionStore? sessionStore = null)
         {
             Tools = tools ?? new AgentToolRegistry();
             SafetyGate = safetyGate;
             Memory = new AgenticMemoryEngine(dimension);
             Dst = new DialogueStateTracker(Memory.Embedder);
+            Sessions = sessionStore ?? new InMemoryDialogSessionStore();
         }
 
         /// <summary>

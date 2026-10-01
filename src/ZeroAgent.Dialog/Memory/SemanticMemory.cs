@@ -12,19 +12,32 @@ namespace ZeroAgent.Dialog.Memory
         public string Title { get; }
         public string Content { get; }
         public string Category { get; }
+        public DateTime CreatedAtUtc { get; } = DateTime.UtcNow;
+        public DateTime? ValidFromUtc { get; set; }
+        public DateTime? ValidUntilUtc { get; set; }
 
-        public SemanticKnowledgeItem(int id, string title, string content, string category)
+        public SemanticKnowledgeItem(int id, string title, string content, string category, DateTime? validFromUtc = null, DateTime? validUntilUtc = null)
         {
             Id = id;
             Title = title;
             Content = content;
             Category = category;
+            ValidFromUtc = validFromUtc;
+            ValidUntilUtc = validUntilUtc;
+        }
+
+        public bool IsValidAt(DateTime? asOfUtc = null)
+        {
+            var now = asOfUtc ?? DateTime.UtcNow;
+            if (ValidFromUtc.HasValue && now < ValidFromUtc.Value) return false;
+            if (ValidUntilUtc.HasValue && now > ValidUntilUtc.Value) return false;
+            return true;
         }
     }
 
     /// <summary>
     /// Semantic Memory (Domain Knowledge, SOP Manuals & Technical Specifications).
-    /// Indexed via ZeroVector for sub-millisecond factual lookups without LLMs.
+    /// Indexed via ZeroVector with bi-temporal validation to prevent obsolete SOPs from surfacing.
     /// </summary>
     public sealed class SemanticMemory
     {
@@ -44,7 +57,13 @@ namespace ZeroAgent.Dialog.Memory
             _vectorIndex = vectorIndex ?? throw new ArgumentNullException(nameof(vectorIndex));
         }
 
-        public SemanticKnowledgeItem Add(string title, string content, ReadOnlySpan<float> embedding, string category = "SOP")
+        public SemanticKnowledgeItem Add(
+            string title, 
+            string content, 
+            ReadOnlySpan<float> embedding, 
+            string category = "SOP",
+            DateTime? validFromUtc = null,
+            DateTime? validUntilUtc = null)
         {
             if (string.IsNullOrWhiteSpace(title)) throw new ArgumentNullException(nameof(title));
 
@@ -52,13 +71,18 @@ namespace ZeroAgent.Dialog.Memory
             {
                 int id = _nextId++;
                 _vectorIndex.Add(id, embedding);
-                var item = new SemanticKnowledgeItem(id, title, content, category);
+                var item = new SemanticKnowledgeItem(id, title, content, category, validFromUtc, validUntilUtc);
                 _items[id] = item;
                 return item;
             }
         }
 
-        public List<(SemanticKnowledgeItem Item, float Similarity)> Query(ReadOnlySpan<float> queryEmbedding, int topK = 3, float minScore = 0.45f)
+        public List<(SemanticKnowledgeItem Item, float Similarity)> Query(
+            ReadOnlySpan<float> queryEmbedding, 
+            int topK = 3, 
+            float minScore = 0.45f,
+            DateTime? asOfUtc = null,
+            bool includeExpired = false)
         {
             VectorSearchResult[] matches;
             lock (_lock)
@@ -74,7 +98,10 @@ namespace ZeroAgent.Dialog.Memory
                     var m = matches[i];
                     if (m.Score >= minScore && _items.TryGetValue(m.Id, out var item))
                     {
-                        results.Add((item, m.Score));
+                        if (includeExpired || item.IsValidAt(asOfUtc))
+                        {
+                            results.Add((item, m.Score));
+                        }
                     }
                 }
             }

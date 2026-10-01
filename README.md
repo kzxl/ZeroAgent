@@ -147,6 +147,18 @@ To eliminate collisions between vector memory search (Semantic / Episodic) and t
 
 ---
 
+## 🛡️ Enterprise Resilience, Bi-Temporal Memory & Security Hardening
+
+To support multi-node industrial deployments and guarantee zero downtime / data corruption:
+
+- **State Checkpointing (`IDialogSessionStore`)**: Abstracted session persistence supporting `InMemoryDialogSessionStore` and `FileCheckpointerSessionStore` (JSON disk snapshots). Active slots, pending clarifications, and dialogue states survive process crashes and node restarts (LangGraph Checkpoint pattern).
+- **Bi-Temporal Knowledge Memory (`ValidFromUtc`, `ValidUntilUtc`)**: Documents and historical incidents carry explicit validity periods (`IsValidAt`). Obsolete SOP manuals or outdated machine states are automatically filtered out from vector queries, eliminating stale facts contamination (Graphiti pattern).
+- **Volatile Telemetry Cache Safety**: Real-time sensor and time-series metrics (`CHECK_TEMPERATURE`, `QUERY_TSDB`, `SENSOR`) enforce an ultra-short 5-second TTL or bypass cache entirely, preventing dangerous stale temperature readings from masking plant emergencies. State-mutating commands (`STOP_MACHINE`, `WRITE_PLC`) are strictly non-cacheable.
+- **Guest Heap Exhaustion (DoS) Mitigation**: `ProfileMemory.PruneStaleGuestProfiles` systematically evicts expired anonymous guest sessions while preserving registered enterprise user profiles.
+- **Model Context Protocol (MCP) Tool Export**: `McpToolExporter` serializes all internal agent tools into standard Model Context Protocol (MCP) JSON schemas, enabling bi-directional interoperability with Claude Desktop, Semantic Kernel, and OpenAI tool protocols.
+
+---
+
 ## 📄 Declarative JSON Intent & Database Binding Architecture
 
 Enables zero-code ERP business expansion without modifying C# or restarting servers:

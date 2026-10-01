@@ -56,19 +56,35 @@ namespace ZeroAgent.Dialog.Engine
             string finalResponse = Generator.FormatResponse(intent.ResponseTemplates, session.Slots, actionOutput);
             workingMemory.AddTurn(userMessage, finalResponse, intent.Name);
 
-            // Populate semantic response cache for idempotent queries (do NOT cache state-mutating actions)
+            // Populate semantic response cache safely:
+            // 1. Never cache state-mutating actions (SET, WRITE, STOP, EMERGENCY)
+            // 2. Volatile real-time telemetry (TEMPERATURE, SENSOR, TSDB) gets ultra-short TTL (5s) to avoid stale safety risks
+            // 3. Static informational intents get standard TTL (10m)
             if (intent.Name != null
                 && !intent.Name.StartsWith("SET_", StringComparison.OrdinalIgnoreCase)
                 && !intent.Name.StartsWith("WRITE_", StringComparison.OrdinalIgnoreCase)
                 && !intent.Name.StartsWith("STOP_", StringComparison.OrdinalIgnoreCase)
                 && !intent.Name.Contains("EMERGENCY"))
             {
-                Memory.ResponseCache.Store(queryEmbedding, resolvedMessage, finalResponse, intent.Name);
+                TimeSpan ttl = IsVolatileIntent(intent.Name) ? TimeSpan.FromSeconds(5) : TimeSpan.FromMinutes(10);
+                Memory.ResponseCache.Store(queryEmbedding, resolvedMessage, finalResponse, intent.Name, ttl);
             }
 
             userProfile.Persona.RecordInteraction(intent.Name, session.Slots);
             session.State = SessionState.Completed;
             return new DialogResponse(finalResponse, SessionState.Completed, intent.Name, session.Slots, true, score);
+        }
+
+        private static bool IsVolatileIntent(string? intentName)
+        {
+            if (string.IsNullOrEmpty(intentName)) return false;
+            return intentName!.IndexOf("TEMPERATURE", StringComparison.OrdinalIgnoreCase) >= 0
+                || intentName.IndexOf("PRESSURE", StringComparison.OrdinalIgnoreCase) >= 0
+                || intentName.IndexOf("TELEMETRY", StringComparison.OrdinalIgnoreCase) >= 0
+                || intentName.IndexOf("SENSOR", StringComparison.OrdinalIgnoreCase) >= 0
+                || intentName.IndexOf("TSDB", StringComparison.OrdinalIgnoreCase) >= 0
+                || intentName.IndexOf("LIVE", StringComparison.OrdinalIgnoreCase) >= 0
+                || intentName.IndexOf("METRIC", StringComparison.OrdinalIgnoreCase) >= 0;
         }
     }
 }
