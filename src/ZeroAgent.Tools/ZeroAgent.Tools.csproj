@@ -19,7 +19,7 @@
     <ProjectReference Include="..\ZeroAgent.Core\ZeroAgent.Core.csproj" />
 
     <ProjectReference Include="..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj" Condition="Exists('..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj')" />
-    <PackageReference Include="ZeroPrompt.Core" Version="1.0.0" Condition="!Exists('..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj')" />
+    <PackageReference Include="ZeroPrompt.Core" Version="1.1.0" Condition="!Exists('..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj')" />
 
     <ProjectReference Include="..\..\..\ZeroPrimitives\src\ZeroPrimitives.Core\ZeroPrimitives.Core.csproj" Condition="Exists('..\..\..\ZeroPrimitives\src\ZeroPrimitives.Core\ZeroPrimitives.Core.csproj')" />
     <PackageReference Include="ZeroPrimitives.Core" Version="1.7.0" Condition="!Exists('..\..\..\ZeroPrimitives\src\ZeroPrimitives.Core\ZeroPrimitives.Core.csproj')" />

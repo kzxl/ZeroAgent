@@ -20,7 +20,7 @@
     <ProjectReference Include="..\ZeroAgent.Tools\ZeroAgent.Tools.csproj" />
 
     <ProjectReference Include="..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj" Condition="Exists('..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj')" />
-    <PackageReference Include="ZeroPrompt.Core" Version="1.0.0" Condition="!Exists('..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj')" />
+    <PackageReference Include="ZeroPrompt.Core" Version="1.1.0" Condition="!Exists('..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj')" />
 
     <ProjectReference Include="..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj" Condition="Exists('..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj')" />
     <PackageReference Include="ZeroVector.Core" Version="1.1.0" Condition="!Exists('..\..\..\ZeroVector\src\ZeroVector.Core\ZeroVector.Core.csproj')" />
