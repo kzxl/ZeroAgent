@@ -63,6 +63,7 @@ namespace ZeroAgent.Dialog.Engine
             var workingMemory = Memory.GetWorkingMemory(sessionId);
             var session = GetOrCreateSession(sessionId);
             profile ??= Memory.Profiles.GetOrCreate(sessionId, "DefaultOperator", UserRole.Operator);
+            profile.Persona.RecordUtterance(userMessage);
 
             // Step 1: Anaphora / Coreference Resolution via Working Memory
             string resolvedMessage = workingMemory.ResolveAnaphora(userMessage);
@@ -222,6 +223,7 @@ namespace ZeroAgent.Dialog.Engine
                     Memory.ResponseCache.Store(queryEmbedding, resolvedMessage, finalResponse, intent.Name);
                 }
 
+                profile.Persona.RecordInteraction(intent.Name, session.Slots);
                 session.State = SessionState.Completed;
                 return new DialogResponse(finalResponse, SessionState.Completed, intent.Name, session.Slots, true, score);
             }

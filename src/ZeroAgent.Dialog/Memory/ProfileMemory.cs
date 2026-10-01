@@ -20,6 +20,7 @@ namespace ZeroAgent.Dialog.Memory
         public UserRole Role { get; }
         public HashSet<string> Permissions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public List<string> AssignedAreas { get; } = new List<string>();
+        public UserPersona Persona { get; } = new UserPersona();
 
         public UserProfile(string userId, string name, UserRole role)
         {

@@ -113,6 +113,41 @@ flowchart TD
 
 ---
 
+## 👤 Long-Term User Persona & Behavioral Personalization Memory (`UserPersona`)
+
+Similar to ChatGPT's custom instructions and context memory, ZeroAgent tracks long-term user characteristics across sessions:
+
+- **Linguistic Pronoun Detection**: Dynamically recognizes communication pronouns ("anh - em", "tao - mày", "tôi - bạn") from user utterances and automatically personalizes response salutations (`Dạ anh...`, `...nhé!`).
+- **Domain & Topic Affinity**: Tracks interaction frequencies per intent (`DominantDomain`), enabling rapid disambiguation of ambiguous questions (e.g. defaulting to Sales Orders for Sales Managers without repetitive confirmation).
+- **Entity Memory**: Remembers preferred customers, equipment IDs, and warehouse areas per user.
+
+---
+
+## 📄 Declarative JSON Intent & Database Binding Architecture
+
+Enables zero-code ERP business expansion without modifying C# or restarting servers:
+
+```json
+{
+  "IntentId": "ERP_QUERY_SALES_ORDER",
+  "DisplayName": "Tra cứu đơn hàng bán",
+  "SampleUtterances": ["kiểm tra đơn hàng", "tình trạng đơn sale"],
+  "Slots": [{ "Name": "order_code", "Type": "string", "IsRequired": true }],
+  "DataSource": {
+    "Provider": "SqlServer",
+    "ConnectionKey": "ERP_Production",
+    "Query": "SELECT OrderCode, CustomerName, DeliveryStatus FROM tb_SalesOrders WHERE OrderCode = @order_code",
+    "Parameters": { "@order_code": "{{slots.order_code}}" }
+  },
+  "ResponseTemplate": "Đơn hàng {{OrderCode}} của {{CustomerName}} - Trạng thái: {{DeliveryStatus}}"
+}
+```
+
+- **Pluggable Executors (`IDataSourceExecutor`)**: Built-in support for `SqlServer`, `Postgres`, `Sqlite`, `DataFrame` (ZeroData in-memory), and `RestApi`.
+- **Zero SQL Injection**: 100% parameterized query execution.
+
+---
+
 ## 🛠️ Industrial Tool Suite & Partial Modularity
 
 The framework is partitioned into modular, single-responsibility components and partial classes:
@@ -145,8 +180,7 @@ Total Processed Turns:      300
 Wall-Clock Execution Time:  103 ms
 Throughput Rate:            ~2,912.62 turns/sec
 Average Turn Latency:       0.34 ms
-Cross-Talk / State Leaks:   0 (0.00%)
-Test Suite Status:          78 / 78 Passed (100%)
+Test Suite Status:          86 / 86 Passed (100%)
 ================================================================================
 ```
 
@@ -154,6 +188,7 @@ Test Suite Status:          78 / 78 Passed (100%)
 - **Zero Cross-Talk**: Complete context isolation across 100 simultaneous user sessions.
 - **Sub-Millisecond Execution**: Core Reflex path executes in $< 1$ ms on standard multi-core CPUs.
 - **Ultra-Fast Context Compaction**: 1,000 deterministic compaction iterations completed in $< 20$ ms ($< 0.02$ ms/op).
+- **Long-Term User Persona**: Dynamically detects pronouns ("anh-em", "tao-mày", "tôi-bạn") and tracks topic/entity preferences across sessions like ChatGPT memory.
 - **Deterministic Slot-Filling**: Diacritic-tolerant NLU reliably extracts parameters regardless of Vietnamese accent variations (e.g., *"ap suat"*, *"áp suất"*, *"ap-suat"*).
 
 ---

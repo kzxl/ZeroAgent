@@ -45,6 +45,11 @@ namespace ZeroAgent.Dialog.Engine
             {
                 context.AddMessage(AgentRole.System, $"Active target entity: {workingMemory.CurrentSubject}. Operator: {profile.Name} (Role: {profile.Role})");
             }
+
+            if (profile != null && profile.Persona != null)
+            {
+                context.AddMessage(AgentRole.System, profile.Persona.GetPersonaPromptSummary(profile.Name));
+            }
             if (!string.IsNullOrEmpty(workingMemory.CurrentMetric))
             {
                 context.AddMessage(AgentRole.System, $"Active metric of interest: {workingMemory.CurrentMetric}");
