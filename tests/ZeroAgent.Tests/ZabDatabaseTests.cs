@@ -298,5 +298,112 @@ namespace ZeroAgent.Tests
                 Assert.True(stats.CompressionRatio >= 1.0);
             }
         }
+
+        [Fact]
+        public void ZabDatabase_WalAppendAndReplay_RecoversUncheckpointedMutations()
+        {
+            string dbPath = Path.Combine(_tempDir, "wal_recovery_test.zab");
+            string walPath = dbPath + "-wal";
+
+            // 1. Create database and baseline snapshot
+            using (var db = ZabDatabase.CreateNew(dbPath))
+            {
+                db.AddKnowledge("init_key", "init_val");
+                db.Commit(); // Wal is now 0 bytes
+            }
+
+            // 2. Add mutations to WAL without calling Commit()
+            using (var db = ZabDatabase.Open(dbPath))
+            {
+                db.Wal.AutoCheckpointThreshold = 10000; // Prevent auto-checkpoint
+                db.AutoCheckpointOnDispose = false;     // Simulate sudden process crash / power cut
+                db.AddKnowledge("wal_key_1", "wal_val_1");
+                db.AddKnowledge("wal_key_2", "wal_val_2");
+            }
+
+            Assert.True(File.Exists(walPath));
+            Assert.True(new FileInfo(walPath).Length > 0);
+
+            // 3. Re-open and verify WAL replay restores uncheckpointed mutations
+            using (var dbReopened = ZabDatabase.Open(dbPath))
+            {
+                Assert.Equal(3, dbReopened.Knowledge.Count);
+                Assert.NotNull(dbReopened.FindKnowledge("init_key"));
+                Assert.NotNull(dbReopened.FindKnowledge("wal_key_1"));
+                Assert.NotNull(dbReopened.FindKnowledge("wal_key_2"));
+                Assert.Equal("wal_val_2", dbReopened.FindKnowledge("wal_key_2")!.Value);
+            }
+        }
+
+        [Fact]
+        public void ZabDatabase_WalTornWrite_TruncatesCorruptedTailAndRecoversValidFrames()
+        {
+            string dbPath = Path.Combine(_tempDir, "torn_write_test.zab");
+            string walPath = dbPath + "-wal";
+
+            using (var dbInit = ZabDatabase.CreateNew(dbPath))
+            {
+                // Baseline snapshot created
+            }
+
+            using (var db = ZabDatabase.Open(dbPath))
+            {
+                db.Wal.AutoCheckpointThreshold = 10000;
+                db.AutoCheckpointOnDispose = false; // Simulate sudden crash mid-execution
+                db.AddKnowledge("valid_1", "val_1");
+                db.AddKnowledge("valid_2", "val_2");
+            }
+
+            Assert.True(File.Exists(walPath));
+            long validWalLength = new FileInfo(walPath).Length;
+            Assert.True(validWalLength > 0);
+
+            // Simulate sudden power outage during 3rd write -> append 15 bytes of truncated corrupted garbage
+            byte[] garbage = new byte[] { 0x5A, 0x57, 0x41, 0x4C, 0x01, 0xFF, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0 };
+            using (var fs = new FileStream(walPath, FileMode.Append, FileAccess.Write))
+            {
+                fs.Write(garbage, 0, garbage.Length);
+            }
+
+            Assert.Equal(validWalLength + garbage.Length, new FileInfo(walPath).Length);
+
+            // Re-open: engine must detect torn write, truncate garbage back to validWalLength, and restore valid_1 & valid_2
+            using (var dbReopened = ZabDatabase.Open(dbPath))
+            {
+                Assert.Equal(2, dbReopened.Knowledge.Count);
+                Assert.NotNull(dbReopened.FindKnowledge("valid_1"));
+                Assert.NotNull(dbReopened.FindKnowledge("valid_2"));
+            }
+
+            // Verify WAL was truncated safely back to valid frames length
+            Assert.Equal(validWalLength, new FileInfo(walPath).Length);
+        }
+
+        [Fact]
+        public void ZabDatabase_Checkpoint_CompactsWalToZeroBytes()
+        {
+            string dbPath = Path.Combine(_tempDir, "checkpoint_test.zab");
+            string walPath = dbPath + "-wal";
+
+            using (var db = ZabDatabase.CreateNew(dbPath))
+            {
+                db.Wal.AutoCheckpointThreshold = 10000;
+                db.AddKnowledge("k1", "v1");
+                db.AddKnowledge("k2", "v2");
+                Assert.True(new FileInfo(walPath).Length > 0);
+
+                // Execute explicit Checkpoint
+                db.Checkpoint();
+
+                // Wal file must be compacted to 0 bytes
+                Assert.Equal(0, new FileInfo(walPath).Length);
+            }
+
+            // Re-open: all checkpointed data intact in baseline .zab
+            using (var dbReopened = ZabDatabase.Open(dbPath))
+            {
+                Assert.Equal(2, dbReopened.Knowledge.Count);
+            }
+        }
     }
 }

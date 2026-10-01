@@ -14,12 +14,13 @@ namespace ZeroAgent.Core.Database
     /// Pure C# Sovereign Embedded AI Database Engine (ZAB1 - Zero Agent Binary).
     /// Provides unified multi-modal storage for Agent Manifest, Knowledge Rules,
     /// SQ8 Quantized Vectors (with direct SIMD evaluation), Reflexion Memory, and Semantic Plan Cache.
-    /// Supports zero-external-dependency ACID file persistence, hardware CRC32C integrity,
-    /// and 100% lossless human-readable JSON export/import.
+    /// Incorporates Write-Ahead Logging (WAL), hardware CRC32C integrity verification,
+    /// automatic torn-write isolation, and 100% lossless human-readable JSON export/import.
     /// </summary>
     public sealed class ZabDatabase : IDisposable
     {
         private readonly string _filePath;
+        private readonly ZabWalJournal _wal;
         private readonly object _lock = new object();
 
         private ZabManifest _manifest;
@@ -32,17 +33,20 @@ namespace ZeroAgent.Core.Database
         private bool _disposed;
 
         public string FilePath => _filePath;
+        public ZabWalJournal Wal => _wal;
         public ZabManifest Manifest => _manifest;
         public IReadOnlyList<ZabKnowledgeRecord> Knowledge => _knowledge;
         public IReadOnlyList<ZabVectorRecord> Vectors => _vectors;
         public IReadOnlyList<ZabReflexionRecord> Reflexions => _reflexions;
         public IReadOnlyList<ZabPlanRecord> Plans => _plans;
         public bool IsDirty => _isDirty;
+        public bool AutoCheckpointOnDispose { get; set; } = true;
 
         private ZabDatabase(string filePath, ZabManifest? manifest = null)
         {
             _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
             _manifest = manifest ?? new ZabManifest();
+            _wal = new ZabWalJournal(filePath);
         }
 
         #region Factory Methods
@@ -59,7 +63,8 @@ namespace ZeroAgent.Core.Database
         }
 
         /// <summary>
-        /// Opens an existing database container file and verifies its hardware checksum.
+        /// Opens an existing database container file, verifies its hardware checksum,
+        /// and replays any pending transactions from the Write-Ahead Log (.zab-wal).
         /// </summary>
         public static ZabDatabase Open(string filePath)
         {
@@ -70,6 +75,10 @@ namespace ZeroAgent.Core.Database
 
             var db = new ZabDatabase(filePath);
             db.Reload();
+
+            // Replay uncommitted WAL frames if present
+            db._wal.RecoverAndReplay(db.ApplyWalMutation);
+
             return db;
         }
 
@@ -89,7 +98,12 @@ namespace ZeroAgent.Core.Database
 
         #region Knowledge CRUD
 
-        public ZabKnowledgeRecord AddKnowledge(string key, string value, string category = "General", string author = "Admin", float confidence = 1.0f)
+        public ZabKnowledgeRecord AddKnowledge(
+            string key,
+            string value,
+            string category = "General",
+            string author = "Admin",
+            float confidence = 1.0f)
         {
             if (string.IsNullOrWhiteSpace(key)) throw new ArgumentNullException(nameof(key));
 
@@ -107,6 +121,15 @@ namespace ZeroAgent.Core.Database
             {
                 _knowledge.Add(record);
                 _isDirty = true;
+
+                // Log to WAL for durability
+                byte[] payload = SerializeKnowledgeRecord(record);
+                _wal.AppendFrame(ZabWalOpCode.AddKnowledge, payload);
+
+                if (_wal.ShouldCheckpoint())
+                {
+                    Checkpoint();
+                }
             }
 
             return record;
@@ -123,6 +146,23 @@ namespace ZeroAgent.Core.Database
                 if (confidence.HasValue) record.Confidence = confidence.Value;
                 record.LastUpdatedUtc = DateTime.UtcNow;
                 _isDirty = true;
+
+                // Log to WAL
+                using (var ms = new MemoryStream())
+                using (var writer = new BinaryWriter(ms, Encoding.UTF8))
+                {
+                    writer.Write(record.Id);
+                    writer.Write(record.Value);
+                    writer.Write(confidence.HasValue);
+                    if (confidence.HasValue) writer.Write(confidence.Value);
+                    _wal.AppendFrame(ZabWalOpCode.UpdateKnowledge, ms.ToArray());
+                }
+
+                if (_wal.ShouldCheckpoint())
+                {
+                    Checkpoint();
+                }
+
                 return true;
             }
         }
@@ -135,6 +175,20 @@ namespace ZeroAgent.Core.Database
                 if (removed > 0)
                 {
                     _isDirty = true;
+
+                    // Log to WAL
+                    using (var ms = new MemoryStream())
+                    using (var writer = new BinaryWriter(ms, Encoding.UTF8))
+                    {
+                        writer.Write(id);
+                        _wal.AppendFrame(ZabWalOpCode.DeleteKnowledge, ms.ToArray());
+                    }
+
+                    if (_wal.ShouldCheckpoint())
+                    {
+                        Checkpoint();
+                    }
+
                     return true;
                 }
                 return false;
@@ -177,6 +231,15 @@ namespace ZeroAgent.Core.Database
             {
                 _vectors.Add(record);
                 _isDirty = true;
+
+                // Log to WAL
+                byte[] payload = SerializeVectorRecord(record);
+                _wal.AppendFrame(ZabWalOpCode.StoreVector, payload);
+
+                if (_wal.ShouldCheckpoint())
+                {
+                    Checkpoint();
+                }
             }
 
             return record;
@@ -238,6 +301,15 @@ namespace ZeroAgent.Core.Database
             {
                 _reflexions.Add(record);
                 _isDirty = true;
+
+                // Log to WAL
+                byte[] payload = SerializeReflexionRecord(record);
+                _wal.AppendFrame(ZabWalOpCode.AddReflexion, payload);
+
+                if (_wal.ShouldCheckpoint())
+                {
+                    Checkpoint();
+                }
             }
 
             return record;
@@ -319,6 +391,15 @@ namespace ZeroAgent.Core.Database
             {
                 _plans.Add(plan);
                 _isDirty = true;
+
+                // Log to WAL
+                byte[] payload = SerializePlanRecord(plan);
+                _wal.AppendFrame(ZabWalOpCode.CachePlan, payload);
+
+                if (_wal.ShouldCheckpoint())
+                {
+                    Checkpoint();
+                }
             }
 
             return plan;
@@ -359,151 +440,228 @@ namespace ZeroAgent.Core.Database
 
         #endregion
 
-        #region Binary Persistence & Atomic Commit
+        #region WAL Mutation Replay (Internal)
+
+        private void ApplyWalMutation(ZabWalOpCode opCode, byte[] payload)
+        {
+            using (var ms = new MemoryStream(payload))
+            using (var reader = new BinaryReader(ms, Encoding.UTF8))
+            {
+                switch (opCode)
+                {
+                    case ZabWalOpCode.AddKnowledge:
+                        {
+                            var rec = DeserializeKnowledgeRecord(reader);
+                            _knowledge.RemoveAll(k => string.Equals(k.Id, rec.Id, StringComparison.OrdinalIgnoreCase));
+                            _knowledge.Add(rec);
+                            break;
+                        }
+                    case ZabWalOpCode.UpdateKnowledge:
+                        {
+                            string id = reader.ReadString();
+                            string val = reader.ReadString();
+                            bool hasConf = reader.ReadBoolean();
+                            float? conf = hasConf ? (float?)reader.ReadSingle() : null;
+
+                            var existing = _knowledge.Find(k => string.Equals(k.Id, id, StringComparison.OrdinalIgnoreCase));
+                            if (existing != null)
+                            {
+                                existing.Value = val;
+                                if (conf.HasValue) existing.Confidence = conf.Value;
+                                existing.LastUpdatedUtc = DateTime.UtcNow;
+                            }
+                            break;
+                        }
+                    case ZabWalOpCode.DeleteKnowledge:
+                        {
+                            string id = reader.ReadString();
+                            _knowledge.RemoveAll(k => string.Equals(k.Id, id, StringComparison.OrdinalIgnoreCase));
+                            break;
+                        }
+                    case ZabWalOpCode.StoreVector:
+                        {
+                            var rec = DeserializeVectorRecord(reader);
+                            _vectors.RemoveAll(v => string.Equals(v.Id, rec.Id, StringComparison.OrdinalIgnoreCase));
+                            _vectors.Add(rec);
+                            break;
+                        }
+                    case ZabWalOpCode.AddReflexion:
+                        {
+                            var rec = DeserializeReflexionRecord(reader);
+                            _reflexions.RemoveAll(r => string.Equals(r.Id, rec.Id, StringComparison.OrdinalIgnoreCase));
+                            _reflexions.Add(rec);
+                            break;
+                        }
+                    case ZabWalOpCode.CachePlan:
+                        {
+                            var rec = DeserializePlanRecord(reader);
+                            _plans.RemoveAll(p => string.Equals(p.Id, rec.Id, StringComparison.OrdinalIgnoreCase));
+                            _plans.Add(rec);
+                            break;
+                        }
+                }
+            }
+        }
+
+        #endregion
+
+        #region Binary Persistence & Atomic Commit / Checkpoint
 
         /// <summary>
-        /// Persists all in-memory changes atomically into the sovereign binary file (.zab).
-        /// Employs a temporary staging file and hardware CRC32C verification to prevent corruption.
+        /// Checkpoints all in-memory state into the baseline .zab file atomically,
+        /// then resets the Write-Ahead Log (.zab-wal) to zero bytes.
         /// </summary>
-        public void Commit()
+        public void Checkpoint()
         {
             lock (_lock)
             {
-                string? dir = Path.GetDirectoryName(_filePath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                {
-                    Directory.CreateDirectory(dir!);
-                }
-
-                string tempFile = _filePath + ".tmp." + Guid.NewGuid().ToString("N");
-
-                using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.ReadWrite, FileShare.None))
-                using (var msPayload = new MemoryStream())
-                using (var payloadWriter = new BinaryWriter(msPayload, Encoding.UTF8))
-                {
-                    var header = new ZabHeader
-                    {
-                        LastModifiedUtc = DateTime.UtcNow
-                    };
-
-                    // 1. Write Manifest
-                    header.ManifestOffset = ZabHeader.HeaderSize + msPayload.Position;
-                    long mStart = msPayload.Position;
-                    payloadWriter.Write(_manifest.AgentId);
-                    payloadWriter.Write(_manifest.Name);
-                    payloadWriter.Write(_manifest.Description);
-                    payloadWriter.Write(_manifest.Role);
-                    payloadWriter.Write(_manifest.SystemPrompt);
-                    payloadWriter.Write(_manifest.RegisteredTools.Count);
-                    foreach (var tool in _manifest.RegisteredTools) payloadWriter.Write(tool);
-                    payloadWriter.Write(_manifest.CreatedAtUtc.ToBinary());
-                    header.ManifestLength = (int)(msPayload.Position - mStart);
-
-                    // 2. Write Knowledge
-                    header.KnowledgeOffset = ZabHeader.HeaderSize + msPayload.Position;
-                    long kStart = msPayload.Position;
-                    payloadWriter.Write(_knowledge.Count);
-                    foreach (var k in _knowledge)
-                    {
-                        payloadWriter.Write(k.Id);
-                        payloadWriter.Write(k.Key);
-                        payloadWriter.Write(k.Value);
-                        payloadWriter.Write(k.Category);
-                        payloadWriter.Write(k.Confidence);
-                        payloadWriter.Write(k.Status);
-                        payloadWriter.Write(k.Author);
-                        payloadWriter.Write(k.LastUpdatedUtc.ToBinary());
-                        payloadWriter.Write(k.ConflictDetails ?? string.Empty);
-                    }
-                    header.KnowledgeLength = (int)(msPayload.Position - kStart);
-
-                    // 3. Write Vectors (SQ8 Quantized)
-                    header.VectorsOffset = ZabHeader.HeaderSize + msPayload.Position;
-                    long vStart = msPayload.Position;
-                    payloadWriter.Write(_vectors.Count);
-                    foreach (var v in _vectors)
-                    {
-                        payloadWriter.Write(v.Id);
-                        payloadWriter.Write(v.Label);
-                        payloadWriter.Write(v.Dimension);
-                        payloadWriter.Write(v.Scale);
-                        payloadWriter.Write(v.Offset);
-                        payloadWriter.Write(v.QuantizedData.Length);
-                        for (int i = 0; i < v.QuantizedData.Length; i++)
-                        {
-                            payloadWriter.Write((byte)v.QuantizedData[i]);
-                        }
-                    }
-                    header.VectorsLength = (int)(msPayload.Position - vStart);
-
-                    // 4. Write Reflexions
-                    header.ReflexionsOffset = ZabHeader.HeaderSize + msPayload.Position;
-                    long rStart = msPayload.Position;
-                    payloadWriter.Write(_reflexions.Count);
-                    foreach (var r in _reflexions)
-                    {
-                        payloadWriter.Write(r.Id);
-                        payloadWriter.Write(r.Goal);
-                        payloadWriter.Write(r.FailureReason);
-                        payloadWriter.Write(r.Lesson);
-                        payloadWriter.Write(r.TimestampUtc.ToBinary());
-                    }
-                    header.ReflexionsLength = (int)(msPayload.Position - rStart);
-
-                    // 5. Write Plans
-                    header.PlansOffset = ZabHeader.HeaderSize + msPayload.Position;
-                    long pStart = msPayload.Position;
-                    payloadWriter.Write(_plans.Count);
-                    foreach (var p in _plans)
-                    {
-                        payloadWriter.Write(p.Id);
-                        payloadWriter.Write(p.Goal);
-                        payloadWriter.Write(p.Solution);
-                        payloadWriter.Write(p.StepsCount);
-                        payloadWriter.Write(p.Confidence);
-                        payloadWriter.Write(p.HitCount);
-                        payloadWriter.Write(p.CachedAtUtc.ToBinary());
-                        bool hasVec = p.GoalVectorSq8 != null && p.GoalVectorSq8.Length > 0;
-                        payloadWriter.Write(hasVec);
-                        if (hasVec)
-                        {
-                            payloadWriter.Write(p.VectorDim);
-                            payloadWriter.Write(p.Scale);
-                            payloadWriter.Write(p.Offset);
-                            payloadWriter.Write(p.GoalVectorSq8!.Length);
-                            for (int i = 0; i < p.GoalVectorSq8.Length; i++)
-                            {
-                                payloadWriter.Write((byte)p.GoalVectorSq8[i]);
-                            }
-                        }
-                    }
-                    header.PlansLength = (int)(msPayload.Position - pStart);
-
-                    // Calculate hardware CRC32C over payload bytes
-                    byte[] payloadBytes = msPayload.ToArray();
-                    header.ChecksumCrc32C = FastCrc.Crc32C(payloadBytes);
-
-                    // Write Header + Payload to File
-                    using (var fileWriter = new BinaryWriter(fs, Encoding.UTF8))
-                    {
-                        header.Write(fileWriter);
-                        fileWriter.Write(payloadBytes);
-                    }
-                }
-
-                // Atomic file swap
-                if (File.Exists(_filePath))
-                {
-                    File.Delete(_filePath);
-                }
-                File.Move(tempFile, _filePath);
-
+                _wal.Checkpoint(() => FlushBaselineSnapshot());
                 _isDirty = false;
             }
         }
 
         /// <summary>
-        /// Reloads state from the binary file, verifying header magic and CRC32C checksum.
+        /// Explicit commit command that checkpoints the database and guarantees durability.
+        /// </summary>
+        public void Commit()
+        {
+            Checkpoint();
+        }
+
+        private void FlushBaselineSnapshot()
+        {
+            string? dir = Path.GetDirectoryName(_filePath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir!);
+            }
+
+            string tempFile = _filePath + ".tmp." + Guid.NewGuid().ToString("N");
+
+            using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.ReadWrite, FileShare.None))
+            using (var msPayload = new MemoryStream())
+            using (var payloadWriter = new BinaryWriter(msPayload, Encoding.UTF8))
+            {
+                var header = new ZabHeader
+                {
+                    LastModifiedUtc = DateTime.UtcNow
+                };
+
+                // 1. Write Manifest
+                header.ManifestOffset = ZabHeader.HeaderSize + msPayload.Position;
+                long mStart = msPayload.Position;
+                payloadWriter.Write(_manifest.AgentId);
+                payloadWriter.Write(_manifest.Name);
+                payloadWriter.Write(_manifest.Description);
+                payloadWriter.Write(_manifest.Role);
+                payloadWriter.Write(_manifest.SystemPrompt);
+                payloadWriter.Write(_manifest.RegisteredTools.Count);
+                foreach (var tool in _manifest.RegisteredTools) payloadWriter.Write(tool);
+                payloadWriter.Write(_manifest.CreatedAtUtc.ToBinary());
+                header.ManifestLength = (int)(msPayload.Position - mStart);
+
+                // 2. Write Knowledge
+                header.KnowledgeOffset = ZabHeader.HeaderSize + msPayload.Position;
+                long kStart = msPayload.Position;
+                payloadWriter.Write(_knowledge.Count);
+                foreach (var k in _knowledge)
+                {
+                    payloadWriter.Write(k.Id);
+                    payloadWriter.Write(k.Key);
+                    payloadWriter.Write(k.Value);
+                    payloadWriter.Write(k.Category);
+                    payloadWriter.Write(k.Confidence);
+                    payloadWriter.Write(k.Status);
+                    payloadWriter.Write(k.Author);
+                    payloadWriter.Write(k.LastUpdatedUtc.ToBinary());
+                    payloadWriter.Write(k.ConflictDetails ?? string.Empty);
+                }
+                header.KnowledgeLength = (int)(msPayload.Position - kStart);
+
+                // 3. Write Vectors (SQ8 Quantized)
+                header.VectorsOffset = ZabHeader.HeaderSize + msPayload.Position;
+                long vStart = msPayload.Position;
+                payloadWriter.Write(_vectors.Count);
+                foreach (var v in _vectors)
+                {
+                    payloadWriter.Write(v.Id);
+                    payloadWriter.Write(v.Label);
+                    payloadWriter.Write(v.Dimension);
+                    payloadWriter.Write(v.Scale);
+                    payloadWriter.Write(v.Offset);
+                    payloadWriter.Write(v.QuantizedData.Length);
+                    for (int i = 0; i < v.QuantizedData.Length; i++)
+                    {
+                        payloadWriter.Write((byte)v.QuantizedData[i]);
+                    }
+                }
+                header.VectorsLength = (int)(msPayload.Position - vStart);
+
+                // 4. Write Reflexions
+                header.ReflexionsOffset = ZabHeader.HeaderSize + msPayload.Position;
+                long rStart = msPayload.Position;
+                payloadWriter.Write(_reflexions.Count);
+                foreach (var r in _reflexions)
+                {
+                    payloadWriter.Write(r.Id);
+                    payloadWriter.Write(r.Goal);
+                    payloadWriter.Write(r.FailureReason);
+                    payloadWriter.Write(r.Lesson);
+                    payloadWriter.Write(r.TimestampUtc.ToBinary());
+                }
+                header.ReflexionsLength = (int)(msPayload.Position - rStart);
+
+                // 5. Write Plans
+                header.PlansOffset = ZabHeader.HeaderSize + msPayload.Position;
+                long pStart = msPayload.Position;
+                payloadWriter.Write(_plans.Count);
+                foreach (var p in _plans)
+                {
+                    payloadWriter.Write(p.Id);
+                    payloadWriter.Write(p.Goal);
+                    payloadWriter.Write(p.Solution);
+                    payloadWriter.Write(p.StepsCount);
+                    payloadWriter.Write(p.Confidence);
+                    payloadWriter.Write(p.HitCount);
+                    payloadWriter.Write(p.CachedAtUtc.ToBinary());
+                    bool hasVec = p.GoalVectorSq8 != null && p.GoalVectorSq8.Length > 0;
+                    payloadWriter.Write(hasVec);
+                    if (hasVec)
+                    {
+                        payloadWriter.Write(p.VectorDim);
+                        payloadWriter.Write(p.Scale);
+                        payloadWriter.Write(p.Offset);
+                        payloadWriter.Write(p.GoalVectorSq8!.Length);
+                        for (int i = 0; i < p.GoalVectorSq8.Length; i++)
+                        {
+                            payloadWriter.Write((byte)p.GoalVectorSq8[i]);
+                        }
+                    }
+                }
+                header.PlansLength = (int)(msPayload.Position - pStart);
+
+                // Calculate hardware CRC32C over payload bytes
+                byte[] payloadBytes = msPayload.ToArray();
+                header.ChecksumCrc32C = FastCrc.Crc32C(payloadBytes);
+
+                // Write Header + Payload to File
+                using (var fileWriter = new BinaryWriter(fs, Encoding.UTF8))
+                {
+                    header.Write(fileWriter);
+                    fileWriter.Write(payloadBytes);
+                }
+            }
+
+            // Atomic file swap
+            if (File.Exists(_filePath))
+            {
+                File.Delete(_filePath);
+            }
+            File.Move(tempFile, _filePath);
+        }
+
+        /// <summary>
+        /// Reloads state from the baseline binary file, verifying header magic and CRC32C checksum.
         /// </summary>
         public void Reload()
         {
@@ -552,18 +710,7 @@ namespace ZeroAgent.Core.Database
                         int kCount = payloadReader.ReadInt32();
                         for (int i = 0; i < kCount; i++)
                         {
-                            _knowledge.Add(new ZabKnowledgeRecord
-                            {
-                                Id = payloadReader.ReadString(),
-                                Key = payloadReader.ReadString(),
-                                Value = payloadReader.ReadString(),
-                                Category = payloadReader.ReadString(),
-                                Confidence = payloadReader.ReadSingle(),
-                                Status = payloadReader.ReadString(),
-                                Author = payloadReader.ReadString(),
-                                LastUpdatedUtc = DateTime.FromBinary(payloadReader.ReadInt64()),
-                                ConflictDetails = payloadReader.ReadString()
-                            });
+                            _knowledge.Add(DeserializeKnowledgeRecord(payloadReader));
                         }
 
                         // 3. Read Vectors
@@ -572,27 +719,7 @@ namespace ZeroAgent.Core.Database
                         int vCount = payloadReader.ReadInt32();
                         for (int i = 0; i < vCount; i++)
                         {
-                            string id = payloadReader.ReadString();
-                            string label = payloadReader.ReadString();
-                            int dim = payloadReader.ReadInt32();
-                            float scale = payloadReader.ReadSingle();
-                            float offset = payloadReader.ReadSingle();
-                            int qLen = payloadReader.ReadInt32();
-                            sbyte[] qData = new sbyte[qLen];
-                            for (int j = 0; j < qLen; j++)
-                            {
-                                qData[j] = (sbyte)payloadReader.ReadByte();
-                            }
-
-                            _vectors.Add(new ZabVectorRecord
-                            {
-                                Id = id,
-                                Label = label,
-                                Dimension = dim,
-                                Scale = scale,
-                                Offset = offset,
-                                QuantizedData = qData
-                            });
+                            _vectors.Add(DeserializeVectorRecord(payloadReader));
                         }
 
                         // 4. Read Reflexions
@@ -601,14 +728,7 @@ namespace ZeroAgent.Core.Database
                         int rCount = payloadReader.ReadInt32();
                         for (int i = 0; i < rCount; i++)
                         {
-                            _reflexions.Add(new ZabReflexionRecord
-                            {
-                                Id = payloadReader.ReadString(),
-                                Goal = payloadReader.ReadString(),
-                                FailureReason = payloadReader.ReadString(),
-                                Lesson = payloadReader.ReadString(),
-                                TimestampUtc = DateTime.FromBinary(payloadReader.ReadInt64())
-                            });
+                            _reflexions.Add(DeserializeReflexionRecord(payloadReader));
                         }
 
                         // 5. Read Plans
@@ -617,37 +737,179 @@ namespace ZeroAgent.Core.Database
                         int pCount = payloadReader.ReadInt32();
                         for (int i = 0; i < pCount; i++)
                         {
-                            var plan = new ZabPlanRecord
-                            {
-                                Id = payloadReader.ReadString(),
-                                Goal = payloadReader.ReadString(),
-                                Solution = payloadReader.ReadString(),
-                                StepsCount = payloadReader.ReadInt32(),
-                                Confidence = payloadReader.ReadSingle(),
-                                HitCount = payloadReader.ReadInt32(),
-                                CachedAtUtc = DateTime.FromBinary(payloadReader.ReadInt64())
-                            };
-                            bool hasVec = payloadReader.ReadBoolean();
-                            if (hasVec)
-                            {
-                                plan.VectorDim = payloadReader.ReadInt32();
-                                plan.Scale = payloadReader.ReadSingle();
-                                plan.Offset = payloadReader.ReadSingle();
-                                int qLen = payloadReader.ReadInt32();
-                                sbyte[] qData = new sbyte[qLen];
-                                for (int j = 0; j < qLen; j++)
-                                {
-                                    qData[j] = (sbyte)payloadReader.ReadByte();
-                                }
-                                plan.GoalVectorSq8 = qData;
-                            }
-                            _plans.Add(plan);
+                            _plans.Add(DeserializePlanRecord(payloadReader));
                         }
                     }
                 }
 
                 _isDirty = false;
             }
+        }
+
+        #endregion
+
+        #region Record Serialization Helpers
+
+        private static byte[] SerializeKnowledgeRecord(ZabKnowledgeRecord k)
+        {
+            using (var ms = new MemoryStream())
+            using (var w = new BinaryWriter(ms, Encoding.UTF8))
+            {
+                w.Write(k.Id);
+                w.Write(k.Key);
+                w.Write(k.Value);
+                w.Write(k.Category);
+                w.Write(k.Confidence);
+                w.Write(k.Status);
+                w.Write(k.Author);
+                w.Write(k.LastUpdatedUtc.ToBinary());
+                w.Write(k.ConflictDetails ?? string.Empty);
+                return ms.ToArray();
+            }
+        }
+
+        private static ZabKnowledgeRecord DeserializeKnowledgeRecord(BinaryReader r)
+        {
+            return new ZabKnowledgeRecord
+            {
+                Id = r.ReadString(),
+                Key = r.ReadString(),
+                Value = r.ReadString(),
+                Category = r.ReadString(),
+                Confidence = r.ReadSingle(),
+                Status = r.ReadString(),
+                Author = r.ReadString(),
+                LastUpdatedUtc = DateTime.FromBinary(r.ReadInt64()),
+                ConflictDetails = r.ReadString()
+            };
+        }
+
+        private static byte[] SerializeVectorRecord(ZabVectorRecord v)
+        {
+            using (var ms = new MemoryStream())
+            using (var w = new BinaryWriter(ms, Encoding.UTF8))
+            {
+                w.Write(v.Id);
+                w.Write(v.Label);
+                w.Write(v.Dimension);
+                w.Write(v.Scale);
+                w.Write(v.Offset);
+                w.Write(v.QuantizedData.Length);
+                for (int i = 0; i < v.QuantizedData.Length; i++)
+                {
+                    w.Write((byte)v.QuantizedData[i]);
+                }
+                return ms.ToArray();
+            }
+        }
+
+        private static ZabVectorRecord DeserializeVectorRecord(BinaryReader r)
+        {
+            string id = r.ReadString();
+            string label = r.ReadString();
+            int dim = r.ReadInt32();
+            float scale = r.ReadSingle();
+            float offset = r.ReadSingle();
+            int qLen = r.ReadInt32();
+            sbyte[] qData = new sbyte[qLen];
+            for (int j = 0; j < qLen; j++)
+            {
+                qData[j] = (sbyte)r.ReadByte();
+            }
+
+            return new ZabVectorRecord
+            {
+                Id = id,
+                Label = label,
+                Dimension = dim,
+                Scale = scale,
+                Offset = offset,
+                QuantizedData = qData
+            };
+        }
+
+        private static byte[] SerializeReflexionRecord(ZabReflexionRecord refRec)
+        {
+            using (var ms = new MemoryStream())
+            using (var w = new BinaryWriter(ms, Encoding.UTF8))
+            {
+                w.Write(refRec.Id);
+                w.Write(refRec.Goal);
+                w.Write(refRec.FailureReason);
+                w.Write(refRec.Lesson);
+                w.Write(refRec.TimestampUtc.ToBinary());
+                return ms.ToArray();
+            }
+        }
+
+        private static ZabReflexionRecord DeserializeReflexionRecord(BinaryReader r)
+        {
+            return new ZabReflexionRecord
+            {
+                Id = r.ReadString(),
+                Goal = r.ReadString(),
+                FailureReason = r.ReadString(),
+                Lesson = r.ReadString(),
+                TimestampUtc = DateTime.FromBinary(r.ReadInt64())
+            };
+        }
+
+        private static byte[] SerializePlanRecord(ZabPlanRecord p)
+        {
+            using (var ms = new MemoryStream())
+            using (var w = new BinaryWriter(ms, Encoding.UTF8))
+            {
+                w.Write(p.Id);
+                w.Write(p.Goal);
+                w.Write(p.Solution);
+                w.Write(p.StepsCount);
+                w.Write(p.Confidence);
+                w.Write(p.HitCount);
+                w.Write(p.CachedAtUtc.ToBinary());
+                bool hasVec = p.GoalVectorSq8 != null && p.GoalVectorSq8.Length > 0;
+                w.Write(hasVec);
+                if (hasVec)
+                {
+                    w.Write(p.VectorDim);
+                    w.Write(p.Scale);
+                    w.Write(p.Offset);
+                    w.Write(p.GoalVectorSq8!.Length);
+                    for (int i = 0; i < p.GoalVectorSq8.Length; i++)
+                    {
+                        w.Write((byte)p.GoalVectorSq8[i]);
+                    }
+                }
+                return ms.ToArray();
+            }
+        }
+
+        private static ZabPlanRecord DeserializePlanRecord(BinaryReader r)
+        {
+            var plan = new ZabPlanRecord
+            {
+                Id = r.ReadString(),
+                Goal = r.ReadString(),
+                Solution = r.ReadString(),
+                StepsCount = r.ReadInt32(),
+                Confidence = r.ReadSingle(),
+                HitCount = r.ReadInt32(),
+                CachedAtUtc = DateTime.FromBinary(r.ReadInt64())
+            };
+            bool hasVec = r.ReadBoolean();
+            if (hasVec)
+            {
+                plan.VectorDim = r.ReadInt32();
+                plan.Scale = r.ReadSingle();
+                plan.Offset = r.ReadSingle();
+                int qLen = r.ReadInt32();
+                sbyte[] qData = new sbyte[qLen];
+                for (int j = 0; j < qLen; j++)
+                {
+                    qData[j] = (sbyte)r.ReadByte();
+                }
+                plan.GoalVectorSq8 = qData;
+            }
+            return plan;
         }
 
         #endregion
@@ -695,7 +957,7 @@ namespace ZeroAgent.Core.Database
         }
 
         /// <summary>
-        /// Restores database contents from a human-readable JSON string and marks container dirty.
+        /// Restores database contents from a human-readable JSON string and checkpoints container.
         /// </summary>
         public void ImportFromJsonString(string json)
         {
@@ -731,7 +993,7 @@ namespace ZeroAgent.Core.Database
                 }
 
                 _isDirty = true;
-                Commit();
+                Checkpoint();
             }
         }
 
@@ -757,9 +1019,10 @@ namespace ZeroAgent.Core.Database
             lock (_lock)
             {
                 long fileLength = File.Exists(_filePath) ? new FileInfo(_filePath).Length : 0;
+                long walLength = File.Exists(_wal.WalFilePath) ? new FileInfo(_wal.WalFilePath).Length : 0;
+                long totalDiskBytes = fileLength + walLength;
 
                 // Estimate raw size if stored uncompressed:
-                // Vectors: 4 bytes per dim instead of 1 byte
                 long rawVectorBytes = 0;
                 foreach (var v in _vectors)
                 {
@@ -773,12 +1036,12 @@ namespace ZeroAgent.Core.Database
                 foreach (var p in _plans) rawTextBytes += (p.Goal.Length + p.Solution.Length) * 2 + 128;
 
                 long estimatedRaw = ZabHeader.HeaderSize + rawVectorBytes + rawTextBytes;
-                if (estimatedRaw < fileLength) estimatedRaw = fileLength * 4;
+                if (estimatedRaw < totalDiskBytes) estimatedRaw = totalDiskBytes * 4;
 
                 return new ZabStorageStats
                 {
                     RawSizeEstimatedBytes = estimatedRaw,
-                    ActualFileSizeBytes = fileLength,
+                    ActualFileSizeBytes = totalDiskBytes,
                     KnowledgeCount = _knowledge.Count,
                     VectorCount = _vectors.Count,
                     ReflexionCount = _reflexions.Count,
@@ -793,10 +1056,11 @@ namespace ZeroAgent.Core.Database
         {
             if (!_disposed)
             {
-                if (_isDirty)
+                if (_isDirty && AutoCheckpointOnDispose)
                 {
-                    try { Commit(); } catch { }
+                    try { Checkpoint(); } catch { }
                 }
+                _wal.Dispose();
                 _disposed = true;
             }
         }
