@@ -4,7 +4,11 @@ using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
 using ZeroAgent.Core.Engine;
+using ZeroAgent.Dialog;
 using ZeroAgent.Dialog.Learning;
+using ZeroLlm.Core.Engine;
+using ZeroLlm.Core.Sampling;
+using ZeroLlm.Core.Training;
 using ZeroTokenizer.Core;
 using ZeroTokenizer.Core.Training;
 using ZeroTokenizer.Core.Vietnamese;
@@ -150,6 +154,96 @@ namespace ZeroAgent.Tests
             Assert.Equal("production", sample.Domain);
             Assert.False(string.IsNullOrWhiteSpace(sample.Response));
             Assert.True(sample.Response.Contains("65%") || sample.Response.Contains("hoàn thành") || sample.Response.Contains("sản xuất") || sample.Response.Length > 10);
+        }
+
+        [Fact]
+        public async Task ErpMicroSlm_IncubationAndTraining_RunsInProcess_WithZeroLlmEngineAndClient()
+        {
+            // 1. Initialize Vietnamese ERP Tokenizer
+            var tokenizer = VietnameseErpTokenizer.CreateDefault();
+
+            // 2. Configure Vietnamese ERP Micro-SLM
+            var config = new LlmModelConfig
+            {
+                Architecture = "llama",
+                VocabSize = tokenizer.VocabularySize + 10,
+                ContextLength = 128,
+                EmbeddingDim = 32,
+                LayerCount = 2,
+                HeadCount = 2,
+                HeadCountKv = 2,
+                FeedForwardDim = 64,
+                RmsNormEps = 1e-5f,
+                RopeFreqBase = 10000.0f,
+                BosTokenId = SpecialTokens.BosId,
+                EosTokenId = SpecialTokens.EosId
+            };
+
+            var model = LlmModel.CreateSynthetic(config, seed: 99);
+
+            // 3. Train on Vietnamese ERP SFT sample using pure C# LlmTrainer
+            var trainer = new LlmTrainer(model, new TrainingConfig
+            {
+                LearningRate = 5e-3f,
+                Mode = TrainingMode.Full
+            });
+
+            string prompt = "<bos><expert>inventory</expert>Người vận hành: Kiểm tra tồn kho SKU-001";
+            string response = "<thought>Kiểm tra tồn kho SKU-001</thought><response>Tồn kho SKU-001 là 500 cái.</response><eos>";
+
+            var firstStep = trainer.TrainStep(prompt, response, tokenizer);
+            Assert.True(firstStep.Loss > 0f);
+
+            for (int i = 0; i < 25; i++)
+            {
+                trainer.TrainStep(prompt, response, tokenizer);
+            }
+
+            var trainedStep = trainer.TrainStep(prompt, response, tokenizer);
+            Assert.True(trainedStep.Loss < firstStep.Loss,
+                $"Loss should decrease: initial={firstStep.Loss}, trained={trainedStep.Loss}");
+
+            // 4. Export trained Micro-SLM to standard GGUF binary format
+            byte[] ggufBytes;
+            using (var ms = new MemoryStream())
+            {
+                model.SaveGguf(ms);
+                ggufBytes = ms.ToArray();
+            }
+
+            Assert.True(ggufBytes.Length > 0);
+
+            // 5. Deploy model via GGUF deserialization
+            LlmModel deployedModel;
+            using (var ms = new MemoryStream(ggufBytes))
+            {
+                deployedModel = LlmModel.LoadGguf(ms);
+            }
+
+            Assert.Equal(config.VocabSize, deployedModel.Config.VocabSize);
+
+            // 6. Instantiate pure C# in-process inference engine and client
+            using var engine = new LlmEngine(deployedModel, tokenizer, new SamplingConfig
+            {
+                Temperature = 0.1f,
+                MaxTokens = 12
+            });
+
+            var zeroLlmClient = new ZeroLlmClient(engine);
+
+            // 7. Verify in-process client completion
+            string generated = await zeroLlmClient.CompleteAsync("<bos><expert>inventory</expert>Người vận hành: Kiểm tra tồn kho");
+            Assert.NotNull(generated);
+
+            // 8. Hook into ZeroDialogEngine MoE bot with Generative NLG
+            var bot = ErpDialogFactory.CreateErpBot();
+            bot.UseGenerativeNlg(zeroLlmClient);
+
+            var dialogResponse = await bot.ChatAsync("session-inprocess-slm", "Kiểm tra tồn kho mã hàng SKU-001 tại kho tổng");
+
+            Assert.Equal("CHECK_INVENTORY", dialogResponse.IntentName);
+            Assert.Equal(ZeroAgent.Dialog.DST.SessionState.Completed, dialogResponse.State);
+            Assert.False(string.IsNullOrWhiteSpace(dialogResponse.Text));
         }
     }
 }
