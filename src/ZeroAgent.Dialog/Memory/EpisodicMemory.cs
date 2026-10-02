@@ -135,6 +135,31 @@ namespace ZeroAgent.Dialog.Memory
             return results;
         }
 
+        /// <summary>
+        /// Prunes decayed episodes whose Ebbinghaus retention falls below the minimum threshold.
+        /// </summary>
+        public int PruneExpiredEpisodes(DateTime nowUtc, float minRetentionThreshold = 0.05f)
+        {
+            lock (_lock)
+            {
+                var toRemove = new List<int>();
+                foreach (var kvp in _episodes)
+                {
+                    if (kvp.Value.ComputeRetention(nowUtc) < minRetentionThreshold)
+                    {
+                        toRemove.Add(kvp.Key);
+                    }
+                }
+
+                for (int i = 0; i < toRemove.Count; i++)
+                {
+                    _episodes.Remove(toRemove[i]);
+                }
+
+                return toRemove.Count;
+            }
+        }
+
         public IReadOnlyList<IncidentEpisode> GetAllEpisodes()
         {
             lock (_lock)
