@@ -909,7 +909,7 @@ namespace ZeroAgent.Core.Database
 
         #region WAL Mutation Replay (Internal)
 
-        private void ApplyWalMutation(ZabWalOpCode opCode, byte[] payload)
+        public void ApplyWalMutation(ZabWalOpCode opCode, byte[] payload)
         {
             using (var ms = new MemoryStream(payload))
             using (var reader = new BinaryReader(ms, Encoding.UTF8))
