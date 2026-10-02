@@ -87,6 +87,59 @@ namespace ZeroAgent.Core.Database
         }
 
         /// <summary>
+        /// Adds a string key to the filter using FNV-1a 64-bit hashing.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void Add(ReadOnlySpan<char> key)
+        {
+            Add(FastHash.Fnv1a64(key));
+        }
+
+        /// <summary>
+        /// Adds a string key to the filter using FNV-1a 64-bit hashing.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void Add(string key)
+        {
+            if (key == null) throw new ArgumentNullException(nameof(key));
+            Add(FastHash.Fnv1a64(key.AsSpan()));
+        }
+
+        /// <summary>
+        /// Fast non-allocating existence check by key span.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool MayContain(ReadOnlySpan<char> key)
+        {
+            return MayContain(FastHash.Fnv1a64(key));
+        }
+
+        /// <summary>
+        /// Fast non-allocating existence check by key.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool MayContain(string key)
+        {
+            if (key == null) return false;
+            return MayContain(FastHash.Fnv1a64(key.AsSpan()));
+        }
+
+        /// <summary>
+        /// Builds a Bloom filter directly from an enumerable collection of string keys.
+        /// </summary>
+        public static ZabBloomFilter Build(System.Collections.Generic.IEnumerable<string> keys, double falsePositiveRate = 0.01)
+        {
+            if (keys == null) throw new ArgumentNullException(nameof(keys));
+            var keyList = keys as System.Collections.Generic.IReadOnlyCollection<string> ?? new System.Collections.Generic.List<string>(keys);
+            var filter = new ZabBloomFilter(Math.Max(64, keyList.Count), falsePositiveRate);
+            foreach (var key in keyList)
+            {
+                filter.Add(key);
+            }
+            return filter;
+        }
+
+        /// <summary>
         /// Exports raw bit-vector for persistent serialization in .zab containers.
         /// </summary>
         public ulong[] ExportBits() => (ulong[])_bits.Clone();

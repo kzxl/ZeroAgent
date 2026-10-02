@@ -1,0 +1,345 @@
+{
+  "Manifest": {
+    "Name": "ZeroAgent-ERP",
+    "Description": "Sovereign Enterprise Knowledge Base for Sales Order Management (MDS ERP System)",
+    "Role": "ERP-Sales-Specialist",
+    "SystemPrompt": "You are ZeroAgent ERP Specialist, managing MDS Sales Orders, approval workflows, MISA sync, packing, and shipment invoices.",
+    "RegisteredTools": [
+      "FindKnowledge",
+      "QueryVectors",
+      "GetPlan",
+      "ValidateOrderTransition"
+    ]
+  },
+  "Knowledge": [
+    {
+      "Id": "kb_so_prefix_rules",
+      "Key": "sales_order_prefix_rules",
+      "Value": "Quy tắc định dạng mã đơn hàng bán trong hệ thống ERP (MDS):\n- Tiền tố mã đơn hàng gồm các nhóm chính: 'MLG' (Mylan Group), 'OC' (Order Confirmation - RTVN), 'RT' (RTSG), 'SAL' (Sales chung).\n- Khi đơn hàng bị hủy bỏ, hệ thống tự động gắn hậu tố '-Cancel' vào mã đơn (ví dụ: 'MLG26-00123' thành 'MLG26-00123-Cancel').\n- Khi đơn hàng được tách (Cancel and Separate), đơn gốc bị đổi mã thành '-Cancel', và các đơn mới tạo ra có hậu tố '-1', '-2', ... '-N' (ví dụ: 'MLG26-00123-1', 'MLG26-00123-2').",
+      "Category": "SalesOrder.Identity",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_agency_mapping",
+      "Key": "sales_order_agency_mapping",
+      "Value": "Quy định về Chi nhánh / Pháp nhân (Agency) trong Đơn hàng ERP:\n- Hệ thống hỗ trợ 3 Agency chính: 'MYLAN' (Tập đoàn Mỹ Lan), 'RTVN' (Công ty Cổ phần Công nghệ Rynan Việt Nam), 'RTSG' (Rynan Technologies Singapore Pte Ltd).\n- Agency là trường bắt buộc (mandatory) khi khởi tạo và lưu đơn hàng.\n- Thuế VAT và hóa đơn có sự phân biệt theo Agency: Đơn hàng nội địa thuộc 'MYLAN' áp dụng thuế suất GTGT chuẩn (8% hoặc 10%), trong khi đơn hàng của 'RTVN'/'RTSG' phục vụ xuất khẩu hoặc hợp đồng công nghệ quốc tế thường có thuế suất 0% hoặc quy chế riêng.",
+      "Category": "SalesOrder.Identity",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_currency_rules",
+      "Key": "sales_order_currency_rules",
+      "Value": "Quy định tiền tệ và đọc số tiền thành chữ trong Đơn hàng:\n- Hai loại tiền tệ được chấp nhận: 'VND' (Việt Nam Đồng) và 'USD' (Đô la Mỹ).\n- Đối với VND: Đơn giá và thành tiền làm tròn đến hàng đơn vị (không có phần thập phân). Đọc số tiền thành chữ kết thúc bằng chữ 'đồng chẵn' hoặc 'đồng'.\n- Đối với USD: Đơn giá và thành tiền tính đến 2 chữ số thập phân (cents). Đọc số tiền thành chữ theo định dạng tiếng Anh (Dollars and Cents).\n- Tiền tệ là trường bắt buộc không được để trống khi lưu đơn hàng.",
+      "Category": "SalesOrder.Identity",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_status_draft",
+      "Key": "sales_order_status_draft",
+      "Value": "Trạng thái Đơn hàng 'Draft' (Bản nháp / Phiếu mới):\n- Ý nghĩa: Đơn hàng mới được lập bởi nhân viên kinh doanh hoặc vừa được trả về nháp từ thao tác Re-Draft.\n- Đặc quyền: Được phép sửa mọi thông tin (khách hàng, ngày phát hành, ghi chú, chi nhánh, tiền tệ), được phép thêm mới, chỉnh sửa đơn giá, số lượng, chiết khấu, xóa các dòng chi tiết sản phẩm.\n- Giới hạn: Đơn hàng ở trạng thái Draft chưa được duyệt sang kế hoạch sản xuất, chưa tạo phiếu đóng gói chính thức và chưa thể lập hóa đơn/xuất kho.",
+      "Category": "SalesOrder.Lifecycle",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_status_active",
+      "Key": "sales_order_status_active",
+      "Value": "Trạng thái Đơn hàng 'Active' (Đã duyệt / Có hiệu lực):\n- Ý nghĩa: Đơn hàng đã được Trưởng bộ phận hoặc người có thẩm quyền phê duyệt thông qua chức năng 'ApproveOrdersAsync'.\n- Tác động: Đơn hàng có hiệu lực chính thức để bộ phận Sản xuất và Kho lên kế hoạch đóng gói (Yêu cầu đóng gói - tbSX_DG_YeuCauDongGois), chuẩn bị vật tư, linh kiện, firmware và bao bì.\n- Điều kiện chuyển đổi: Chỉ những đơn hàng đang ở trạng thái 'Draft' mới được phép duyệt sang 'Active'.",
+      "Category": "SalesOrder.Lifecycle",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_status_finalized",
+      "Key": "sales_order_status_finalized",
+      "Value": "Trạng thái Đơn hàng 'Finalized' (Đã khóa / Hoàn tất):\n- Ý nghĩa: Đơn hàng đã hoàn thành sản xuất, nghiệm thu và sẵn sàng cho công tác tài chính kế toán và xuất kho.\n- Khóa dữ liệu: NGHIÊM CẤM chỉnh sửa thông tin đơn hàng hoặc dòng sản phẩm chi tiết khi đơn đã Finalized ('Cannot edit order has status finalized').\n- Tự động hóa MISA: Khi đơn chuyển sang Finalized, hệ thống tự động đẩy bản ghi vào hàng đợi đồng bộ kế toán MISA ('tbMISA_SyncQueues') với trạng thái Status = 0 (Pending) để chờ đồng bộ chứng từ bán hàng sang phần mềm MISA.\n- Xuất hóa đơn: Chỉ đơn hàng ở trạng thái Finalized mới đủ điều kiện để tạo Phiếu đóng gói xuất hàng (Shipment) và Hóa đơn (Invoice).",
+      "Category": "SalesOrder.Lifecycle",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_status_cancelled",
+      "Key": "sales_order_status_cancelled",
+      "Value": "Trạng thái Đơn hàng 'Cancelled' (Đã hủy):\n- Ý nghĩa: Đơn hàng đã bị hủy bỏ theo quyết định của khách hàng hoặc ban điều hành.\n- Quy tắc mã: Mã đơn hàng được tự động thêm hậu tố '-Cancel'.\n- Chặn chỉnh sửa: Tuyệt đối không cho phép sửa, thêm dòng, xóa dòng chi tiết trên đơn hàng đã hủy ('This Order has been cancelled').\n- Hủy liên kết đóng gói: Nếu đơn có liên kết với phiếu Yêu cầu đóng gói (tbSX_DG_YeuCauDongGois), hệ thống tự động cập nhật HuyPhieu = 1, ghi nhận người cập nhật và thời gian cập nhật.\n- Cảnh báo: Tự động gửi thông báo hệ thống (tbSYS_Notifications) về việc hủy đơn đến các phòng ban liên quan.",
+      "Category": "SalesOrder.Lifecycle",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_state_transitions",
+      "Key": "sales_order_state_transitions",
+      "Value": "Biểu đồ chuyển trạng thái (FSM) của Đơn hàng trong ERP:\n1. Khởi tạo -> 'Draft'\n2. 'Draft' -> 'Active' (Thao tác: Approve/Duyệt; Yêu cầu quyền duyệt)\n3. 'Active' -> 'Finalized' (Thao tác: Finalize/Khóa phiếu; Đẩy vào hàng đợi MISA)\n4. 'Active' hoặc 'Completed' -> 'Draft' (Thao tác: ReDraft; Để mở khóa chỉnh sửa lại khi cần thiết; Không được gọi khi đang ở Draft)\n5. Bất kỳ trạng thái hợp lệ nào -> 'Cancelled' (Thao tác: CancelOrder; Đổi mã thành -Cancel, hủy phiếu đóng gói)\n6. Tách đơn: Đơn gốc chuyển thành '-Cancel', sinh ra N đơn mới ở trạng thái 'Draft' với mã '-1', '-2'...",
+      "Category": "SalesOrder.Lifecycle",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_approval_rules",
+      "Key": "sales_order_approval_rules",
+      "Value": "Quy tắc duyệt đơn hàng hàng loạt (ApproveOrdersAsync):\n- Đầu vào: Danh sách ID đơn hàng (List<int> orderIds).\n- Kiểm tra hợp lệ: Từng đơn hàng phải tồn tại và phải đang ở trạng thái 'Draft'. Nếu có bất kỳ đơn nào không ở trạng thái Draft, giao dịch lập tức bị rollback và báo lỗi 'Order {OrderID} is not in Draft status'.\n- Kết quả duyệt: Trạng thái đổi thành 'Active', ghi nhật ký kiểm toán (Audit ActionLog) với định dạng '[Approve] OrderID: {OrderID}, Status: Draft => Active'. Toàn bộ quá trình thực hiện trong Database Transaction an toàn.",
+      "Category": "SalesOrder.Operations",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_finalization_rules",
+      "Key": "sales_order_finalization_rules",
+      "Value": "Quy tắc khóa hoàn tất đơn hàng hàng loạt (FinalizeOrdersAsync):\n- Đầu vào: Danh sách ID đơn hàng (List<int> orderIds).\n- Kiểm tra hợp lệ: Từng đơn hàng phải tồn tại và phải đang ở trạng thái 'Active'. Nếu đơn chưa được duyệt Active, hệ thống từ chối và báo lỗi 'Order {OrderID} is not in Active status'.\n- Đổi trạng thái: Chuyển sang 'Finalized'.\n- Cơ chế đồng bộ MISA: Tự động tra cứu hoặc chèn bản ghi mới vào 'tbMISA_SyncQueues' với Status = 0 (Pending), RetryCount = 0, QueuedAt = Server Time, LastError = null. Ghi nhật ký '[Finalize] {log}'.",
+      "Category": "SalesOrder.Operations",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_cancellation_rules",
+      "Key": "sales_order_cancellation_rules",
+      "Value": "Quy tắc hủy đơn hàng (CancelOrderAsync):\n- Nếu mã đơn đã chứa '-Cancel', hệ thống báo lỗi 'This order has been canceled'.\n- Cập nhật trường: OrderID += '-Cancel', idUserUpdate = CurrentUserId, DateUpdate = ServerDate.\n- Hủy phiếu Yêu cầu đóng gói (tbSX_DG_YeuCauDongGois): Tìm theo idOrder hoặc idPacking, gán HuyPhieu = 1, lưu vết thời gian và người cập nhật.\n- Sinh thông báo NotificationFactory.CreateOrderCancelled với đầy đủ thông tin: OrderID, PackingId, CustomerName, SaleRequestedDate.\n- Ghi log kiểm toán ActionLogHelper.Log(OrderConstants.ActionLog.Cancel).",
+      "Category": "SalesOrder.Operations",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_separate_rules",
+      "Key": "sales_order_separate_rules",
+      "Value": "Quy tắc Hủy và Tách đơn hàng (CancelAndSeparateOrderAsync):\n- Áp dụng khi khách hàng muốn chia nhỏ 1 đơn hàng lớn thành nhiều đơn hàng giao theo từng đợt hoặc cho các địa điểm khác nhau.\n- Bước 1: Đơn gốc bị hủy và đổi tên thành '{baseOrderId}-Cancel', phiếu đóng gói của đơn gốc bị hủy (HuyPhieu = 1).\n- Bước 2: Tạo ra N đơn hàng mới có mã là '{baseOrderId}-1', '{baseOrderId}-2', ..., '{baseOrderId}-N'.\n- Bước 3: Toàn bộ thông tin header của các đơn mới được kế thừa từ đơn gốc nhưng đưa về trạng thái 'Draft', xóa bỏ các liên kết cũ (idPacking = null, idRepair = null, SORTVN = null, SORTSG = null, isChanging = false).\n- Bước 4: Sao chép toàn bộ chi tiết sản phẩm (order details) từ đơn gốc sang từng đơn con mới với HighlightEdit = 0 và idOrder mới tương ứng.\n- Bước 5: Bắn notification danh sách các mã đơn mới sinh ra đến kho đóng gói.",
+      "Category": "SalesOrder.Operations",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_clone_rules",
+      "Key": "sales_order_clone_rules",
+      "Value": "Quy tắc Sao chép (Clone) Đơn hàng:\n- Thực hiện thông qua SaveChangeItemAsync với cờ isClone = true.\n- Tạo đơn hàng mới hoàn toàn với id = 0, người tạo và ngày tạo cập nhật theo phiên làm việc hiện tại.\n- Tự động tính toán lại đơn giá cho từng dòng sản phẩm chi tiết bằng hàm GetPriceAsync(customerId, agency, productId, quantity, 'Clone', agency) dựa trên bảng giá mới nhất của khách hàng.\n- Quy tắc Thuế VAT khi Clone: Nếu Agency == 'MYLAN' thì giữ nguyên thuế suất VAT của dòng cũ; nếu thuộc Agency khác (RTVN/RTSG) thì áp dụng Tax = 0.\n- Reset toàn bộ thông tin sửa chữa lỗi kỹ thuật: YCSC_ThongTinLoi = null, YCSC_BaoHanh = null, YCSC_SO = null.\n- Ghi log audit: '[Clone] {MainOrderID} -> {CloneOrderID}'.",
+      "Category": "SalesOrder.Operations",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_redraft_rules",
+      "Key": "sales_order_redraft_rules",
+      "Value": "Quy tắc Chuyển đơn về bản nháp (ReDraftByIdAsync):\n- Cho phép người dùng chuyển trạng thái đơn hàng quay trở lại 'Draft' để chỉnh sửa khi phát hiện sai sót dữ liệu.\n- Điều kiện tiên quyết: Đơn hàng hiện tại KHÔNG ĐƯỢC ĐANG Ở trạng thái 'Draft' ('Only Re-Draft Orders not in draft status!!').\n- Khi đã chuyển về Draft, người dùng có toàn quyền cập nhật các trường thông tin hoặc thêm/bớt/sửa các dòng chi tiết sản phẩm trước khi gửi duyệt lại.",
+      "Category": "SalesOrder.Operations",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_required_fields",
+      "Key": "sales_order_required_fields",
+      "Value": "Các trường bắt buộc khi lưu Đơn hàng (ValidateOrderAsync):\n1. CustomerId: Phải lớn hơn 0 (Không được để trống khách hàng, báo lỗi: 'Customer is required').\n2. Currency: Bắt buộc chọn 'VND' hoặc 'USD' (Báo lỗi: 'Currency is required').\n3. Agency: Bắt buộc chọn 'MYLAN', 'RTVN', hoặc 'RTSG' (Báo lỗi: 'Agency is required').\n4. IssueDate: Ngày phát hành không được là default(DateTime) (Báo lỗi: 'Issue Date is required').\n- Tất cả các trường ngày (IssueDate, ShipmentDate, SaleRequestedDate, PromiseDate, PackingUpdate) nếu nhỏ hơn mốc tối thiểu của SQL Server (01/01/1753) sẽ tự động được chuẩn hóa về null hoặc ngày hiện tại của máy chủ.",
+      "Category": "SalesOrder.Validation",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_edit_restrictions",
+      "Key": "sales_order_edit_restrictions",
+      "Value": "Ràng buộc chặn sửa đổi Đơn hàng và Chi tiết:\n- Đơn hàng bị hủy (-Cancel): Bị chặn tuyệt đối ở cả cấp độ Header và cấp độ Detail ('This Order has been cancelled').\n- Đơn hàng đã khóa (Finalized): Bị chặn tuyệt đối không cho lưu thay đổi Header ('Cannot edit order has status finalized'), không cho thêm chi tiết, không cho sửa chi tiết ('Cannot edit finalized order'), không cho xóa chi tiết.\n- Mục đích: Bảo vệ tính toàn vẹn dữ liệu kế toán và tài chính vì đơn Finalized đã được đồng bộ sang sổ kế toán MISA và sẵn sàng xuất hóa đơn tài chính.",
+      "Category": "SalesOrder.Validation",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_line_item_pricing",
+      "Key": "sales_order_line_item_pricing",
+      "Value": "Công thức tính toán Tài chính & Chi tiết dòng hàng:\n- Thành tiền chiết khấu (DiscountMoney) = Số lượng * Đơn giá * (Tỷ lệ chiết khấu / 100).\n- Tiền thuế VAT (TaxMoney) = (Số lượng * Đơn giá - Thành tiền chiết khấu) * (Tỷ lệ thuế / 100).\n- Tổng tiền thanh toán dòng (Total) = (Số lượng * Đơn giá - Thành tiền chiết khấu) + Tiền thuế VAT.\n- Chức năng điều chỉnh hàng loạt: ChangeOrderPriceRateAsync cho phép nhân toàn bộ đơn giá các dòng trong đơn với một tỷ lệ (rate) chỉ định trong một giao dịch duy nhất.",
+      "Category": "SalesOrder.LineItem",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_line_item_fields",
+      "Key": "sales_order_line_item_fields",
+      "Value": "Các thông số kỹ thuật và trường dữ liệu trên Chi tiết Đơn hàng:\n- ProductId: Mã định danh sản phẩm trong danh mục vật tư.\n- ProductName / ProductNameVN: Tên tiếng Anh và tên thương mại tiếng Việt của sản phẩm.\n- Quantity, Price, Discount, Tax: Số lượng, đơn giá, phần trăm giảm giá và thuế suất.\n- PowerCord: Dây nguồn đi kèm thiết bị (ví dụ: chuẩn EU, US, UK).\n- FirmwareCode: Mã phiên bản phần mềm nhúng cần nạp vào máy trước khi xuất xưởng.\n- LotTM: Số lô thương mại / lô mực in.\n- ProductLabel: Nhãn dán tùy chỉnh trên thân sản phẩm.\n- LabelPackingNote: Ghi chú đặc biệt cho khâu dán nhãn và đóng thùng.",
+      "Category": "SalesOrder.LineItem",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_line_item_reorder",
+      "Key": "sales_order_line_item_reorder",
+      "Value": "Thao tác sắp xếp và chuẩn hóa số thứ tự dòng hàng (No):\n- SwapOrderDetailNoAsync: Hoán đổi thứ tự hiển thị của 1 dòng chi tiết với dòng liền kề (di chuyển lên trên moveUp=true hoặc xuống dưới moveUp=false).\n- NormalizeOrderDetailsNoAsync: Tự động sắp xếp lại toàn bộ các dòng hàng chưa bị xóa (isDeleted == false) theo thứ tự No tăng dần và đánh số liên tục không gián đoạn: 1, 2, 3, ... N.\n- RefreshNoForDetailAsync: Cập nhật thứ tự hiển thị từ một danh mục ID được cấu hình trên giao diện kéo thả.",
+      "Category": "SalesOrder.LineItem",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_misa_sync_queue",
+      "Key": "sales_order_misa_sync_queue",
+      "Value": "Cơ chế Đồng bộ Kế toán MISA (tbMISA_SyncQueues):\n- Kích hoạt: Tự động kích hoạt khi thực hiện FinalizeOrdersAsync.\n- Cấu trúc hàng đợi:\n  + OrderID: Mã đơn hàng được khóa.\n  + Status: 0 = Pending (Đang chờ đồng bộ), 1 = Processing (Đang xử lý), 2 = Success (Đồng bộ thành công), 3 = Error (Thất bại).\n  + RetryCount: Số lần thử lại (khởi tạo bằng 0, tăng dần khi gặp lỗi mạng/API MISA).\n  + QueuedAt: Thời điểm đưa vào hàng đợi.\n  + LastError: Lưu vết thông báo lỗi chi tiết nếu MISA API phản hồi thất bại.\n- Dịch vụ nền MISA Sync Worker sẽ quét các bản ghi Status = 0 để đẩy chứng từ bán hàng sang cơ sở dữ liệu kế toán MISA.",
+      "Category": "SalesOrder.Integration",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_packaging_request",
+      "Key": "sales_order_packaging_request",
+      "Value": "Tích hợp Yêu cầu đóng gói sản xuất (tbSX_DG_YeuCauDongGois):\n- Đơn hàng liên kết với phiếu đóng gói qua trường idPacking trên đơn hoặc trường idOrder trên phiếu đóng gói.\n- Đồng bộ ghi chú thay đổi: Khi người dùng sửa đơn hàng có nhập ChangeNote, hệ thống tự động cập nhật vào trường Order_ChangeNote của phiếu đóng gói tương ứng.\n- Khi hủy đơn hàng: Phiếu đóng gói được cập nhật HuyPhieu = 1, đồng thời gửi thông báo NotificationFactory.CreateOrderCancelled với phiên bản đóng gói YCDGSoLanThayDoi để xưởng đóng gói ngừng sản xuất kịp thời.",
+      "Category": "SalesOrder.Integration",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_shipment_invoice_flow",
+      "Key": "sales_order_shipment_invoice_flow",
+      "Value": "Quy trình Tự động tạo Xuất kho (Shipment) và Hóa đơn (Invoice) (AddShipmentInvoiceForOrdersAsync):\n- Điều kiện tiên quyết 1: Đơn hàng BẮT BUỘC phải ở trạng thái 'Finalized'.\n- Điều kiện tiên quyết 2: Đơn hàng BẮT BUỘC phải có ngày xuất hàng 'ShipmentDate != null'.\n- Điều kiện tiên quyết 3: Đơn hàng chưa từng được tạo hóa đơn trước đó (nếu đã có trong tbSALE_Invoices thì ném ngoại lệ: 'Selected order has been created invoice, please check again').\n- Điều kiện tiên quyết 4: Đơn hàng phải có ít nhất 1 dòng sản phẩm chi tiết.\n- Quy tắc sinh mã Shipment: Sinh mã theo năm 'SM{yy}-{00000}' (ví dụ: SM26-00001).\n- Quy tắc sinh mã Invoice: Nếu Agency == 'MYLAN' sinh mã 'IV{yy}-{00000}', nếu Agency == 'RTVN'/'RTSG' sinh mã 'INV{yy}-{00000}'.\n- Chuyển toàn bộ danh sách sản phẩm sang tbSALE_ShipmentDetail với PackedQty = detail.Quantity và tính toán tổng tiền hóa đơn.",
+      "Category": "SalesOrder.Integration",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_tripartite_links",
+      "Key": "sales_order_tripartite_links",
+      "Value": "Liên kết đơn hàng ba bên (Tripartite Order Linking - tbSALE_OrderLinks):\n- Áp dụng cho chuỗi cung ứng nội bộ giữa Mylan Group và Rynan: Một giao dịch có thể bao gồm đơn đặt hàng từ khách hàng nước ngoài (RT), chuyển thành đơn sản xuất trung gian (OC), và đơn cung ứng vật tư/mực in gốc (MLG).\n- Cấu trúc nhóm liên kết (OrderLinkGroup): Một GroupId liên kết tối đa 3 đơn hàng với tiền tố bắt buộc không trùng nhau ('MLG', 'OC', 'RT').\n- Khi tra cứu đơn để liên kết (GetOrderForLinkByIdAsync), hệ thống tự động loại trừ các đơn đã liên kết và chỉ hiển thị các đơn có tiền tố còn thiếu trong nhóm.",
+      "Category": "SalesOrder.Integration",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_so_repair_integration",
+      "Key": "sales_order_repair_integration",
+      "Value": "Tích hợp Đơn dịch vụ sửa chữa và bảo hành (Repair / Warranty):\n- Đơn hàng bán có thể được tạo từ một phiếu yêu cầu sửa chữa thiết bị (idRepair hoặc idSaleRepair).\n- LoadRepairDataToOrderAsync nạp các hạng mục linh kiện thay thế và chi phí dịch vụ vào chi tiết đơn hàng.\n- Các trường nghiệp vụ bảo hành trên chi tiết: YCSC_ThongTinLoi (Mô tả hiện tượng hư hỏng), YCSC_BaoHanh (Được bảo hành hay tính phí), YCSC_SO (Số đơn hàng gốc của thiết bị trước đây).\n- Nếu toàn bộ các dòng chi tiết bị xóa khỏi đơn, trường idSaleRepair trên header tự động được gán về null.",
+      "Category": "SalesOrder.Integration",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_faq_cannot_edit_order",
+      "Key": "faq_why_cannot_edit_order",
+      "Value": "Câu hỏi: Tại sao tôi không thể chỉnh sửa đơn hàng (bị báo lỗi 'Cannot edit order...')?\nTrả lời: Có 2 nguyên nhân chính dẫn đến việc hệ thống chặn chỉnh sửa:\n1. Đơn hàng đã ở trạng thái 'Finalized' (Đã khóa): Đơn hàng đã hoàn tất phê duyệt và chốt số liệu đồng bộ sang kế toán MISA. Để sửa, người có thẩm quyền phải chuyển đơn về trạng thái 'Draft' (thông qua chức năng Re-Draft).\n2. Đơn hàng đã bị hủy ('-Cancel'): Đơn hàng có mã kết thúc bằng '-Cancel' đã bị vô hiệu hóa hoàn toàn, phiếu đóng gói liên quan đã bị hủy và không thể phục hồi chỉnh sửa.",
+      "Category": "SalesOrder.FAQ",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_faq_how_to_approve_order",
+      "Key": "faq_how_to_approve_order",
+      "Value": "Câu hỏi: Làm thế nào để phê duyệt một đơn hàng bán?\nTrả lời: Để duyệt đơn hàng bán:\n1. Đơn hàng bắt buộc phải đang ở trạng thái 'Draft' (Bản nháp).\n2. Đơn hàng phải có đầy đủ các thông tin hợp lệ: Khách hàng (CustomerId > 0), Tiền tệ (VND/USD), Chi nhánh (Agency: MYLAN/RTVN/RTSG), Ngày phát hành (IssueDate) và ít nhất 1 dòng chi tiết sản phẩm.\n3. Quản lý hoặc nhân viên có quyền duyệt (Permission Tag 'MDS.Sales.Order**') thực hiện chức năng Duyệt (Approve). Hệ thống sẽ chuyển trạng thái đơn sang 'Active', ghi nhật ký kiểm toán và thông báo cho bộ phận đóng gói/sản xuất.",
+      "Category": "SalesOrder.FAQ",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_faq_how_to_split_order",
+      "Key": "faq_how_to_split_order",
+      "Value": "Câu hỏi: Khách hàng muốn chia đơn hàng hiện tại thành 2 hoặc nhiều đợt giao thì xử lý như thế nào?\nTrả lời: Sử dụng chức năng 'Hủy và tách đơn' (Cancel and Separate):\n1. Chọn đơn hàng cần tách và nhập số lượng đơn muốn phân tách (N >= 2).\n2. Hệ thống sẽ tự động hủy đơn hàng gốc (mã đổi thành {OrderID}-Cancel) và hủy phiếu đóng gói cũ.\n3. Hệ thống tự động tạo ra N đơn hàng mới ở trạng thái Draft với mã dạng {OrderID}-1, {OrderID}-2... mang đầy đủ danh sách mặt hàng ban đầu.\n4. Nhân viên kinh doanh chỉ việc mở từng đơn hàng mới để điều chỉnh lại số lượng sản phẩm và ngày giao hàng (SaleRequestedDate/PromiseDate) theo thỏa thuận với khách.",
+      "Category": "SalesOrder.FAQ",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_faq_shipment_invoice_conditions",
+      "Key": "faq_conditions_for_shipment_invoice_creation",
+      "Value": "Câu hỏi: Điều kiện để tạo phiếu xuất kho (Shipment) và Hóa đơn (Invoice) từ đơn hàng là gì?\nTrả lời: Hệ thống yêu cầu thỏa mãn đồng thời 4 điều kiện sau:\n1. Trạng thái đơn hàng phải là 'Finalized' (Đã khóa hoàn tất).\n2. Đơn hàng phải có ngày xuất kho ('ShipmentDate' không được null).\n3. Đơn hàng chưa từng được tạo hóa đơn trước đó (HasInvoice == 0).\n4. Đơn hàng phải có ít nhất một dòng sản phẩm chi tiết có số lượng > 0.\nNếu thiếu bất kỳ điều kiện nào, hệ thống sẽ từ chối tạo và hiển thị thông báo lỗi tương ứng.",
+      "Category": "SalesOrder.FAQ",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "kb_faq_misa_sync_flow",
+      "Key": "faq_misa_sync_trigger_and_status",
+      "Value": "Câu hỏi: Khi nào đơn hàng được đồng bộ sang phần mềm kế toán MISA và làm sao biết trạng thái đồng bộ?\nTrả lời:\n- Thời điểm kích hoạt: Ngay khi đơn hàng được bấm 'Finalize' (Khóa phiếu).\n- Quy trình: Hệ thống tự động thêm mã đơn vào bảng hàng đợi 'tbMISA_SyncQueues' với Status = 0 (Pending).\n- Trạng thái đồng bộ hiển thị trên lưới đơn hàng (MisaSyncStatusText):\n  + Chờ đồng bộ (Pending - 0)\n  + Đang xử lý (Processing - 1)\n  + Đã đồng bộ thành công (Success - 2)\n  + Lỗi đồng bộ (Error - 3, kèm thông báo lỗi chi tiết tại MisaLastError để người dùng điều chỉnh danh mục hoặc tài khoản kế toán).",
+      "Category": "SalesOrder.FAQ",
+      "Author": "MDS.System",
+      "Confidence": 1.0,
+      "LastUpdatedUtc": "2026-10-02T03:00:00Z"
+    }
+  ],
+  "Reflexions": [
+    {
+      "Id": "refl_so_01",
+      "Goal": "Chỉnh sửa đơn giá hoặc số lượng sản phẩm trên đơn hàng",
+      "FailureReason": "Cố gắng gọi API lưu chi tiết khi đơn hàng đang ở trạng thái Finalized hoặc Cancelled dẫn đến ngoại lệ 'Cannot edit finalized order' hoặc 'This Order has been cancelled'.",
+      "Lesson": "Trước khi thực hiện thao tác cập nhật chi tiết đơn hàng, luôn kiểm tra trường Status. Nếu đơn hàng là Finalized, phải thông báo cho người dùng biết đơn đã chốt kế toán MISA và yêu cầu Re-Draft nếu được phép. Nếu đơn có chứa '-Cancel', tuyệt đối từ chối chỉnh sửa.",
+      "TimestampUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "refl_so_02",
+      "Goal": "Tạo phiếu xuất kho (Shipment) và Hóa đơn (Invoice) tự động",
+      "FailureReason": "Gọi AddShipmentInvoiceForOrdersAsync khi đơn hàng chưa được duyệt Finalized hoặc trường ShipmentDate bị để trống dẫn đến ngoại lệ dừng hệ thống.",
+      "Lesson": "Luôn kiểm tra bộ điều kiện tiên quyết trước khi xuất kho: (1) Đơn phải ở trạng thái Finalized, (2) ShipmentDate != null, (3) hasInvoice == 0. Nếu chưa thỏa mãn, hướng dẫn người dùng cập nhật ngày xuất hàng hoặc hoàn tất khóa đơn trước.",
+      "TimestampUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "refl_so_03",
+      "Goal": "Tạo đơn hàng mới hoặc sao chép (Clone) đơn hàng",
+      "FailureReason": "Thiếu các trường bắt buộc như CustomerId, Currency hoặc Agency dẫn đến ValidateOrderAsync trả về Invalid.",
+      "Lesson": "Khi hỗ trợ người dùng tạo đơn hàng qua hội thoại, chủ động thu thập đủ 4 tham số nền tảng: Khách hàng (CustomerId), Chi nhánh (Agency: MYLAN/RTVN/RTSG), Loại tiền tệ (VND/USD) và Ngày phát hành (IssueDate).",
+      "TimestampUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "refl_so_04",
+      "Goal": "Hủy đơn hàng có liên kết đóng gói nhà máy",
+      "FailureReason": "Hủy đơn hàng trên hệ thống kinh doanh nhưng quên thông báo hoặc không cập nhật trạng thái hủy trên phiếu đóng gói dẫn đến xưởng vẫn xuất kho nhầm.",
+      "Lesson": "Quy trình hủy đơn chuẩn (CancelOrderAsync) phải luôn đồng thời gắn '-Cancel' trên đơn hàng, đổi HuyPhieu = 1 trên phiếu đóng gói tbSX_DG_YeuCauDongGois và bắn notification cảnh báo khẩn đến bộ phận kho.",
+      "TimestampUtc": "2026-10-02T03:00:00Z"
+    }
+  ],
+  "Plans": [
+    {
+      "Id": "plan_so_lookup_tracking",
+      "Goal": "Tra cứu thông tin chi tiết và tiến độ thực hiện của một đơn hàng bán",
+      "Solution": "Bước 1: Trích xuất mã đơn hàng (orderCode) từ câu hỏi người dùng.\nBước 2: Gọi truy vấn GetByIdAsync hoặc GetListAsync với bộ lọc OrderCode.\nBước 3: Đọc trường Status (Draft / Active / Finalized / Cancelled) và hiển thị tên khách hàng, ngày phát hành.\nBước 4: Tra cứu tiến độ đóng gói liên kết qua GetPackingIdByOrderIdAsync (kiểm tra HuyPhieu và Order_ChangeNote).\nBước 5: Kiểm tra tiến độ đồng bộ MISA qua MisaSyncStatusText và thông báo ngày giao dự kiến (PromiseDate).",
+      "StepsCount": 5,
+      "Confidence": 0.98,
+      "HitCount": 1,
+      "CachedAtUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "plan_so_approval_workflow",
+      "Goal": "Thực hiện quy trình duyệt đơn và khóa chốt đồng bộ sang kế toán MISA",
+      "Solution": "Bước 1: Xác thực quyền hạn người dùng (yêu cầu vai trò Supervisor hoặc Quản lý kinh doanh).\nBước 2: Kiểm tra trạng thái hiện tại của đơn hàng. Nếu là 'Draft', gọi ApproveOrdersAsync để chuyển sang 'Active'.\nBước 3: Sau khi sản xuất nghiệm thu đủ điều kiện xuất hàng, gọi FinalizeOrdersAsync để chuyển trạng thái sang 'Finalized'.\nBước 4: Hệ thống tự động ghi bản ghi vào tbMISA_SyncQueues với Status = 0 (Pending).\nBước 5: Trả lời xác nhận thành công và cung cấp mã giao dịch đồng bộ MISA.",
+      "StepsCount": 5,
+      "Confidence": 0.96,
+      "HitCount": 1,
+      "CachedAtUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "plan_so_split_workflow",
+      "Goal": "Xử lý yêu cầu hủy và tách đơn hàng bán thành nhiều đợt giao",
+      "Solution": "Bước 1: Kiểm tra mã đơn hàng hiện tại xem có chứa hậu tố '-Cancel' chưa. Nếu chưa, tiếp tục.\nBước 2: Xác nhận với người dùng số lượng đơn con cần tách (ví dụ 2 hoặc 3 đơn).\nBước 3: Thực hiện gọi hàm CancelAndSeparateOrderAsync(orderId, numSeparations).\nBước 4: Hệ thống đổi mã đơn cũ thành {OrderID}-Cancel, hủy phiếu đóng gói cũ và sinh ra các đơn mới {OrderID}-1, {OrderID}-2 ở trạng thái Draft.\nBước 5: Cung cấp danh sách các mã đơn mới tạo và hướng dẫn người dùng vào điều chỉnh số lượng/ngày giao cho từng đơn con.",
+      "StepsCount": 5,
+      "Confidence": 0.97,
+      "HitCount": 1,
+      "CachedAtUtc": "2026-10-02T03:00:00Z"
+    },
+    {
+      "Id": "plan_so_shipment_invoice_workflow",
+      "Goal": "Tự động lập phiếu xuất kho Shipment và Hóa đơn Invoice từ đơn hàng",
+      "Solution": "Bước 1: Kiểm tra trạng thái đơn hàng. Nếu chưa phải là 'Finalized', thông báo cần khóa đơn trước.\nBước 2: Kiểm tra trường ShipmentDate trên đơn hàng. Nếu null, yêu cầu cập nhật ngày giao thực tế.\nBước 3: Kiểm tra trường HasInvoice. Nếu > 0, thông báo đơn này đã được lập hóa đơn trước đó.\nBước 4: Gọi AddShipmentInvoiceForOrdersAsync để sinh mã Shipment SM{yy}-{00000} và Invoice IV/INV{yy}-{00000}.\nBước 5: Trả về thông tin mã xuất kho, mã hóa đơn và tổng tiền thành chữ đã sinh.",
+      "StepsCount": 5,
+      "Confidence": 0.99,
+      "HitCount": 1,
+      "CachedAtUtc": "2026-10-02T03:00:00Z"
+    }
+  ]
+}
