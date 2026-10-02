@@ -134,5 +134,21 @@ namespace ZeroAgent.Dialog.Memory
 
             return results;
         }
+
+        public IReadOnlyList<IncidentEpisode> GetAllEpisodes()
+        {
+            lock (_lock)
+            {
+                return new List<IncidentEpisode>(_episodes.Values);
+            }
+        }
+
+        public bool TryGetEmbedding(int id, Span<float> destination)
+        {
+            lock (_lock)
+            {
+                return _vectorIndex.TryGet(id, destination);
+            }
+        }
     }
 }

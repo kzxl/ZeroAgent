@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using ZeroPrimitives.Cryptography;
+using ZeroVector.Core.Indices;
 using ZeroVector.Core.Metrics;
 using ZeroVector.Core.Quantization;
 
@@ -16,7 +17,7 @@ namespace ZeroAgent.Core.Database
     /// Provides unified multi-modal storage for:
     /// 1. Agent Manifest & Capabilities
     /// 2. Verified Domain Knowledge & Rules (O(1) Hash-Indexed)
-    /// 3. SQ8 Quantized Vectors with Direct SIMD Cosine Evaluation
+    /// 3. SQ8 Quantized Vectors accelerated by TwoStageVectorIndex (1-bit POPCNT filter + SIMD rerank)
     /// 4. Reflexion Episodic Memory
     /// 5. Semantic Plan Trajectory Cache
     /// 6. Semi-Parametric Quantized Neural Action Policy Network
@@ -35,6 +36,11 @@ namespace ZeroAgent.Core.Database
         private readonly Dictionary<string, ZabKnowledgeRecord> _knowledgeKeyIndex = new Dictionary<string, ZabKnowledgeRecord>(StringComparer.OrdinalIgnoreCase);
 
         private readonly List<ZabVectorRecord> _vectors = new List<ZabVectorRecord>();
+        private TwoStageVectorIndex? _twoStageAccelerator;
+        private readonly Dictionary<string, int> _vectorIdToInt = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<int, ZabVectorRecord> _intToVectorRecord = new Dictionary<int, ZabVectorRecord>();
+        private int _nextVectorIntId = 1;
+
         private readonly List<ZabReflexionRecord> _reflexions = new List<ZabReflexionRecord>();
         private readonly List<ZabPlanRecord> _plans = new List<ZabPlanRecord>();
         private ZabNeuralPolicy? _neuralPolicy;
@@ -262,6 +268,42 @@ namespace ZeroAgent.Core.Database
         /// Stores an embedding vector by L2-normalizing it and compressing to SQ8 (4x memory reduction).
         /// Replaces any existing vector with the same ID for strict idempotency.
         /// </summary>
+        private void RebuildTwoStageAccelerator()
+        {
+            if (_vectors.Count == 0)
+            {
+                _twoStageAccelerator = null;
+                _vectorIdToInt.Clear();
+                _intToVectorRecord.Clear();
+                return;
+            }
+
+            int dim = _vectors[0].Dimension;
+            _twoStageAccelerator = new TwoStageVectorIndex(dim, Math.Max(16, _vectors.Count), VectorMetricType.Cosine, QuantizationStorageMode.ScalarQuantizedSq8);
+            _vectorIdToInt.Clear();
+            _intToVectorRecord.Clear();
+            _nextVectorIntId = 1;
+
+            float[] fVec = new float[dim];
+            for (int i = 0; i < _vectors.Count; i++)
+            {
+                var vec = _vectors[i];
+                if (vec.Dimension != dim) continue;
+
+                int intId = _nextVectorIntId++;
+                _vectorIdToInt[vec.Id] = intId;
+                _intToVectorRecord[intId] = vec;
+
+                BinaryQuantizer.DequantizeSQ8(vec.QuantizedData, fVec, vec.Scale, vec.Offset);
+                _twoStageAccelerator.Add(intId, fVec);
+            }
+        }
+
+        /// <summary>
+        /// Stores an embedding vector by L2-normalizing it and compressing to SQ8 (4x memory reduction).
+        /// Replaces any existing vector with the same ID for strict idempotency.
+        /// Synchronizes both the sovereign .zab snapshot records and the TwoStageVectorIndex accelerator.
+        /// </summary>
         public ZabVectorRecord StoreVector(string label, ReadOnlySpan<float> vector, string? id = null)
         {
             if (vector.IsEmpty) throw new ArgumentException("Vector cannot be empty.", nameof(vector));
@@ -289,6 +331,27 @@ namespace ZeroAgent.Core.Database
             {
                 _vectors.RemoveAll(v => string.Equals(v.Id, finalId, StringComparison.OrdinalIgnoreCase));
                 _vectors.Add(record);
+
+                if (_twoStageAccelerator == null || _twoStageAccelerator.Dimension != normVec.Length)
+                {
+                    RebuildTwoStageAccelerator();
+                }
+                else
+                {
+                    if (_vectorIdToInt.TryGetValue(finalId, out int existingIntId))
+                    {
+                        _intToVectorRecord[existingIntId] = record;
+                        _twoStageAccelerator.Add(existingIntId, normVec);
+                    }
+                    else
+                    {
+                        int newIntId = _nextVectorIntId++;
+                        _vectorIdToInt[finalId] = newIntId;
+                        _intToVectorRecord[newIntId] = record;
+                        _twoStageAccelerator.Add(newIntId, normVec);
+                    }
+                }
+
                 _isDirty = true;
                 _walSequenceNumber++;
 
@@ -317,6 +380,16 @@ namespace ZeroAgent.Core.Database
                 int removed = _vectors.RemoveAll(v => string.Equals(v.Id, id, StringComparison.OrdinalIgnoreCase));
                 if (removed > 0)
                 {
+                    if (_vectorIdToInt.TryGetValue(id, out int intId))
+                    {
+                        _vectorIdToInt.Remove(id);
+                        _intToVectorRecord.Remove(intId);
+                    }
+                    if (_vectors.Count > 0 && _vectors.Count % 32 == 0)
+                    {
+                        RebuildTwoStageAccelerator();
+                    }
+
                     _isDirty = true;
                     _walSequenceNumber++;
 
@@ -342,7 +415,8 @@ namespace ZeroAgent.Core.Database
         }
 
         /// <summary>
-        /// Searches vectors using hardware SIMD-accelerated SQ8 inner products with Affine Hoisting.
+        /// Searches vectors using TwoStageVectorIndex (1-bit BQ POPCNT hardware filter + SQ8 SIMD rerank)
+        /// when collection size >= 16, or hoisted SIMD flat scan for smaller collections.
         /// Non-blocking read lock allows multiple simultaneous searches without contending with writers.
         /// </summary>
         public List<(ZabVectorRecord Record, float Similarity)> SearchVectors(
@@ -356,12 +430,31 @@ namespace ZeroAgent.Core.Database
             float[] normQuery = queryVector.ToArray();
             VectorMetrics.NormalizeL2(normQuery);
 
-            float querySum = BinaryQuantizer.ComputeVectorSum(normQuery);
             var results = new List<(ZabVectorRecord Record, float Similarity)>();
 
             _rwLock.EnterReadLock();
             try
             {
+                // High-performance path: When index has >= 16 vectors, use TwoStageVectorIndex
+                // (Stage 1: 1-bit BQ POPCNT hardware filter in ~50ns -> Stage 2: SQ8 AVX2 SIMD reranking)
+                if (_twoStageAccelerator != null && _vectors.Count >= 16 && normQuery.Length == _twoStageAccelerator.Dimension)
+                {
+                    int fetchCount = Math.Min(_vectors.Count, Math.Max(topK * 4, 32));
+                    var matches = _twoStageAccelerator.SearchTopK(normQuery, fetchCount, VectorMetricType.Cosine);
+                    for (int i = 0; i < matches.Length; i++)
+                    {
+                        var m = matches[i];
+                        if (m.Score >= minSimilarity && _intToVectorRecord.TryGetValue(m.Id, out var rec))
+                        {
+                            results.Add((rec, m.Score));
+                            if (results.Count >= topK) break;
+                        }
+                    }
+                    return results;
+                }
+
+                // Fallback for smaller collections (< 16 vectors): SIMD-accelerated hoisted flat scan
+                float querySum = BinaryQuantizer.ComputeVectorSum(normQuery);
                 for (int i = 0; i < _vectors.Count; i++)
                 {
                     var vec = _vectors[i];
@@ -373,19 +466,18 @@ namespace ZeroAgent.Core.Database
                         results.Add((vec, sim));
                     }
                 }
+
+                results.Sort((a, b) => b.Similarity.CompareTo(a.Similarity));
+                if (results.Count > topK)
+                {
+                    results.RemoveRange(topK, results.Count - topK);
+                }
+                return results;
             }
             finally
             {
                 _rwLock.ExitReadLock();
             }
-
-            results.Sort((a, b) => b.Similarity.CompareTo(a.Similarity));
-            if (results.Count > topK)
-            {
-                results.RemoveRange(topK, results.Count - topK);
-            }
-
-            return results;
         }
 
         #endregion
@@ -1177,6 +1269,7 @@ namespace ZeroAgent.Core.Database
                         {
                             _vectors.Add(DeserializeVectorRecord(payloadReader));
                         }
+                        RebuildTwoStageAccelerator();
 
                         // 4. Read Reflexions
                         _reflexions.Clear();

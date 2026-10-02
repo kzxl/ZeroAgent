@@ -108,5 +108,21 @@ namespace ZeroAgent.Dialog.Memory
 
             return results;
         }
+
+        public IReadOnlyList<SemanticKnowledgeItem> GetAllItems()
+        {
+            lock (_lock)
+            {
+                return new List<SemanticKnowledgeItem>(_items.Values);
+            }
+        }
+
+        public bool TryGetEmbedding(int id, Span<float> destination)
+        {
+            lock (_lock)
+            {
+                return _vectorIndex.TryGet(id, destination);
+            }
+        }
     }
 }

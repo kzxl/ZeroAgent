@@ -180,5 +180,21 @@ namespace ZeroAgent.Dialog.Memory
                 _index.Clear();
             }
         }
+
+        public IReadOnlyList<SemanticCacheEntry> GetAllEntries()
+        {
+            lock (_lock)
+            {
+                return new List<SemanticCacheEntry>(_entries.Values);
+            }
+        }
+
+        public bool TryGetEmbedding(int id, Span<float> destination)
+        {
+            lock (_lock)
+            {
+                return _index.TryGet(id, destination);
+            }
+        }
     }
 }
