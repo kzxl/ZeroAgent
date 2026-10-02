@@ -1771,6 +1771,62 @@ namespace ZeroAgent.Core.Database
             }
         }
 
+        /// <summary>
+        /// Builds a high-scale persistent index mapping 64-bit key hashes to container offsets for O(1) point lookups.
+        /// </summary>
+        public ZabBillionScaleIndex BuildBillionScaleIndex(int recordsPerBlock = 256)
+        {
+            _rwLock.EnterWriteLock();
+            try
+            {
+                if (_isDirty || _wal.PendingFrames > 0)
+                {
+                    Checkpoint();
+                }
+
+                var slots = new List<ZabIndexSlot>(_knowledge.Count);
+
+                using (var fs = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var reader = new BinaryReader(fs, Encoding.UTF8))
+                {
+                    var header = ZabHeader.Read(reader);
+                    if (header.KnowledgeOffset > 0 && header.KnowledgeLength > 0)
+                    {
+                        fs.Position = header.KnowledgeOffset;
+                        int count = reader.ReadInt32();
+                        for (int i = 0; i < count; i++)
+                        {
+                            long recordStart = fs.Position;
+                            string id = reader.ReadString();
+                            string key = reader.ReadString();
+                            string val = reader.ReadString();
+                            string cat = reader.ReadString();
+                            float conf = reader.ReadSingle();
+                            string stat = reader.ReadString();
+                            string author = reader.ReadString();
+                            long updated = reader.ReadInt64();
+                            string details = reader.ReadString();
+                            long recordEnd = fs.Position;
+
+                            slots.Add(new ZabIndexSlot
+                            {
+                                KeyHash = FastHash.Fnv1a64(key.AsSpan()),
+                                FileOffset = recordStart,
+                                Length = (int)(recordEnd - recordStart),
+                                Checksum = 0
+                            });
+                        }
+                    }
+                }
+
+                return ZabBillionScaleIndex.Build(slots, recordsPerBlock);
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
+        }
+
         #endregion
 
         public void Dispose()
