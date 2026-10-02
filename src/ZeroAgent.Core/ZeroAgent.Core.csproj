@@ -33,10 +33,10 @@
     <PackageReference Include="ZeroTokenizer.Core" Version="1.0.0" Condition="!Exists('..\..\..\ZeroTokenizer\src\ZeroTokenizer.Core\ZeroTokenizer.Core.csproj')" />
 
     <ProjectReference Include="..\..\..\ZeroLlm\src\ZeroLlm.Core\ZeroLlm.Core.csproj" Condition="Exists('..\..\..\ZeroLlm\src\ZeroLlm.Core\ZeroLlm.Core.csproj')" />
-    <PackageReference Include="ZeroLlm.Core" Version="1.1.0" Condition="!Exists('..\..\..\ZeroLlm\src\ZeroLlm.Core\ZeroLlm.Core.csproj')" />
+    <PackageReference Include="ZeroLlm.Core" Version="1.2.0" Condition="!Exists('..\..\..\ZeroLlm\src\ZeroLlm.Core\ZeroLlm.Core.csproj')" />
 
     <ProjectReference Include="..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj" Condition="Exists('..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj')" />
-    <PackageReference Include="ZeroPrompt.Core" Version="1.1.0" Condition="!Exists('..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj')" />
+    <PackageReference Include="ZeroPrompt.Core" Version="1.2.0" Condition="!Exists('..\..\..\ZeroPrompt\src\ZeroPrompt.Core\ZeroPrompt.Core.csproj')" />
   </ItemGroup>
 
   <ItemGroup>
