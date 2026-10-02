@@ -16,26 +16,31 @@ namespace ZeroAgent.Core.Database
     {
         private readonly string _filePath;
         private readonly MemoryMappedFile _mmf;
-        private readonly MemoryMappedViewAccessor _accessor;
+        private readonly MemoryMappedViewAccessor? _accessor;
         private readonly ZabHeader _header;
         private readonly long _fileLength;
+        private readonly bool _isPagedWindowing;
         private bool _disposed;
 
         public string FilePath => _filePath;
         public ZabHeader Header => _header;
         public long FileLength => _fileLength;
+        public bool IsPagedWindowing => _isPagedWindowing;
 
-        private ZabMMapReader(string filePath, MemoryMappedFile mmf, MemoryMappedViewAccessor accessor, ZabHeader header, long fileLength)
+        private ZabMMapReader(string filePath, MemoryMappedFile mmf, MemoryMappedViewAccessor? accessor, ZabHeader header, long fileLength, bool isPagedWindowing)
         {
             _filePath = filePath;
             _mmf = mmf;
             _accessor = accessor;
             _header = header;
             _fileLength = fileLength;
+            _isPagedWindowing = isPagedWindowing;
         }
 
         /// <summary>
         /// Opens a sovereign .zab file for ultra-fast memory-mapped read access.
+        /// Automatically falls back to Paged Windowing on 32-bit processes or multi-gigabyte files
+        /// to prevent virtual address space exhaustion.
         /// </summary>
         public static ZabMMapReader Open(string filePath)
         {
@@ -48,8 +53,15 @@ namespace ZeroAgent.Core.Database
                 throw new InvalidDataException("File is too small to contain a valid ZAB header.");
             }
 
+            // Determine if full-file view accessor would exhaust 32-bit virtual memory space (max 2GB total)
+            bool usePagedWindowing = !Environment.Is64BitProcess || fileInfo.Length > 1024L * 1024 * 1024;
+
             var mmf = MemoryMappedFile.CreateFromFile(filePath, FileMode.Open, null, 0, MemoryMappedFileAccess.Read);
-            var accessor = mmf.CreateViewAccessor(0, fileInfo.Length, MemoryMappedFileAccess.Read);
+            MemoryMappedViewAccessor? accessor = null;
+            if (!usePagedWindowing)
+            {
+                accessor = mmf.CreateViewAccessor(0, fileInfo.Length, MemoryMappedFileAccess.Read);
+            }
 
             // Read header directly from memory map
             ZabHeader header;
@@ -61,12 +73,12 @@ namespace ZeroAgent.Core.Database
 
             if (!header.IsValid)
             {
-                accessor.Dispose();
+                accessor?.Dispose();
                 mmf.Dispose();
                 throw new InvalidDataException("Invalid ZAB magic header or unsupported version.");
             }
 
-            return new ZabMMapReader(filePath, mmf, accessor, header, fileInfo.Length);
+            return new ZabMMapReader(filePath, mmf, accessor, header, fileInfo.Length, usePagedWindowing);
         }
 
         /// <summary>
@@ -199,37 +211,54 @@ namespace ZeroAgent.Core.Database
         }
 
         /// <summary>
-        /// Point lookup: Retrieves a single knowledge record directly by Key using the billion-scale index,
-        /// bypassing full table scan and achieving sub-3 microsecond point read latency.
+        /// Point lookup: Retrieves a single knowledge record directly by Key using the billion-scale index.
+        /// Incorporates Exact String Verification against 64-bit hash collisions.
         /// </summary>
         public ZabKnowledgeRecord? ReadKnowledgeByKey(string key, ZabBillionScaleIndex index)
         {
             ThrowIfDisposed();
             if (string.IsNullOrWhiteSpace(key) || index == null) return null;
 
-            if (!index.TryLookup(key.AsSpan(), out long offset, out int length))
+            var candidates = new List<ZabIndexSlot>(4);
+            if (!index.TryLookupCandidates(key.AsSpan(), candidates) || candidates.Count == 0)
             {
                 return null;
             }
 
-            if (offset <= 0 || length <= 0) return null;
-
-            using (var stream = _mmf.CreateViewStream(offset, length, MemoryMappedFileAccess.Read))
-            using (var reader = new BinaryReader(stream, Encoding.UTF8))
+            for (int i = 0; i < candidates.Count; i++)
             {
-                return new ZabKnowledgeRecord
+                long offset = candidates[i].FileOffset;
+                int length = candidates[i].Length;
+                if (offset <= 0 || length <= 0) continue;
+
+                using (var stream = _mmf.CreateViewStream(offset, length, MemoryMappedFileAccess.Read))
+                using (var reader = new BinaryReader(stream, Encoding.UTF8))
                 {
-                    Id = reader.ReadString(),
-                    Key = reader.ReadString(),
-                    Value = reader.ReadString(),
-                    Category = reader.ReadString(),
-                    Confidence = reader.ReadSingle(),
-                    Status = reader.ReadString(),
-                    Author = reader.ReadString(),
-                    LastUpdatedUtc = DateTime.FromBinary(reader.ReadInt64()),
-                    ConflictDetails = reader.ReadString()
-                };
+                    string id = reader.ReadString();
+                    string recKey = reader.ReadString();
+
+                    // Guard against 64-bit hash collisions: Verify actual key matches
+                    if (!string.Equals(recKey, key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    return new ZabKnowledgeRecord
+                    {
+                        Id = id,
+                        Key = recKey,
+                        Value = reader.ReadString(),
+                        Category = reader.ReadString(),
+                        Confidence = reader.ReadSingle(),
+                        Status = reader.ReadString(),
+                        Author = reader.ReadString(),
+                        LastUpdatedUtc = DateTime.FromBinary(reader.ReadInt64()),
+                        ConflictDetails = reader.ReadString()
+                    };
+                }
             }
+
+            return null;
         }
 
         private void ThrowIfDisposed()
@@ -241,7 +270,7 @@ namespace ZeroAgent.Core.Database
         {
             if (!_disposed)
             {
-                _accessor.Dispose();
+                _accessor?.Dispose();
                 _mmf.Dispose();
                 _disposed = true;
             }

@@ -1049,6 +1049,25 @@ namespace ZeroAgent.Core.Database
                 Directory.CreateDirectory(dir!);
             }
 
+            // Disk exhaustion safeguard: ensure sufficient physical disk space for atomic snapshot replacement
+            try
+            {
+                string fullPath = Path.GetFullPath(_filePath);
+                string root = Path.GetPathRoot(fullPath) ?? string.Empty;
+                if (!string.IsNullOrEmpty(root))
+                {
+                    var drive = new DriveInfo(root);
+                    long currentSize = File.Exists(_filePath) ? new FileInfo(_filePath).Length : 0;
+                    long minRequiredSpace = Math.Max(10 * 1024 * 1024, (long)(currentSize * 1.2)); // At least 10MB or 120% of current size
+                    if (drive.AvailableFreeSpace < minRequiredSpace)
+                    {
+                        throw new IOException($"Insufficient disk space on drive '{root}'. Required: {minRequiredSpace / (1024 * 1024)} MB, Available: {drive.AvailableFreeSpace / (1024 * 1024)} MB. Aborting checkpoint to prevent storage exhaustion.");
+                    }
+                }
+            }
+            catch (IOException) { throw; }
+            catch { /* Fallback gracefully if drive info not accessible in restricted environments */ }
+
             string tempFile = _filePath + ".tmp." + Guid.NewGuid().ToString("N");
 
             using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.ReadWrite, FileShare.None))

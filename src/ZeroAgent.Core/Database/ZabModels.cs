@@ -145,6 +145,11 @@ namespace ZeroAgent.Core.Database
         public sbyte[] WeightsInt8 { get; set; } = Array.Empty<sbyte>(); // Flattened [OutputClasses.Count * InputDim]
         public float[] Biases { get; set; } = Array.Empty<float>();
 
+        // Elastic Weight Consolidation (EWC) anchor to prevent catastrophic forgetting
+        public sbyte[]? AnchorWeights { get; set; }
+        public int MaxDriftFromAnchor { get; set; } = 127;
+        public float ElasticDecayLambda { get; set; } = 0.0f;
+
         public ZabNeuralPolicy() { }
 
         public ZabNeuralPolicy(string modelName, int inputDim, IReadOnlyList<string> outputClasses)
@@ -154,6 +159,7 @@ namespace ZeroAgent.Core.Database
             OutputClasses = new List<string>(outputClasses ?? Array.Empty<string>());
             Biases = new float[OutputClasses.Count];
             WeightsInt8 = new sbyte[OutputClasses.Count * InputDim];
+            AnchorWeights = new sbyte[WeightsInt8.Length];
         }
 
         /// <summary>
@@ -196,6 +202,7 @@ namespace ZeroAgent.Core.Database
                     WeightsInt8[rowOffset + d] = (sbyte)Math.Max(-127, Math.Min(127, q));
                 }
             }
+            AnchorWeights = (sbyte[])WeightsInt8.Clone();
         }
 
         /// <summary>
@@ -318,21 +325,40 @@ namespace ZeroAgent.Core.Database
             PredictChoice(inputEmbedding, out _);
 
             int targetRow = targetIdx * InputDim;
-            float invScale = Scale > 1e-7f ? 1.0f / Scale : 127.0f;
             int step = (int)Math.Max(1, Math.Round(learningRate * 127.0f));
+
+            if (AnchorWeights == null || AnchorWeights.Length != WeightsInt8.Length)
+            {
+                AnchorWeights = (sbyte[])WeightsInt8.Clone();
+            }
 
             for (int d = 0; d < InputDim; d++)
             {
+                int idx = targetRow + d;
+                int currentWeight = WeightsInt8[idx];
+                int anchor = AnchorWeights[idx];
+
                 if (inputEmbedding[d] > 0.01f)
                 {
-                    int w = WeightsInt8[targetRow + d] + step;
-                    WeightsInt8[targetRow + d] = (sbyte)Math.Min(127, w);
+                    currentWeight += step;
                 }
                 else if (inputEmbedding[d] < -0.01f)
                 {
-                    int w = WeightsInt8[targetRow + d] - step;
-                    WeightsInt8[targetRow + d] = (sbyte)Math.Max(-127, w);
+                    currentWeight -= step;
                 }
+
+                // Elastic Weight Consolidation: Pull gently towards anchor baseline
+                if (ElasticDecayLambda > 0.0f)
+                {
+                    int pull = (int)Math.Round(ElasticDecayLambda * (currentWeight - anchor));
+                    currentWeight -= pull;
+                }
+
+                // Bounded Drift Clamping: Prevent catastrophic forgetting and saturation at boundaries
+                int minBound = Math.Max(-127, anchor - MaxDriftFromAnchor);
+                int maxBound = Math.Min(127, anchor + MaxDriftFromAnchor);
+
+                WeightsInt8[idx] = (sbyte)Math.Max(minBound, Math.Min(maxBound, currentWeight));
             }
 
             if (targetIdx < Biases.Length)

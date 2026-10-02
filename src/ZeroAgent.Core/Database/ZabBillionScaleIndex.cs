@@ -215,6 +215,68 @@ namespace ZeroAgent.Core.Database
         }
 
         /// <summary>
+        /// Retrieves all candidate slots matching the key hash (guards against 64-bit hash collisions).
+        /// </summary>
+        public bool TryLookupCandidates(ReadOnlySpan<char> key, List<ZabIndexSlot> candidates)
+        {
+            if (candidates == null) throw new ArgumentNullException(nameof(candidates));
+            if (key.IsEmpty || _blocks.Length == 0) return false;
+
+            ulong keyHash = ComputeKeyHash(key);
+
+            // Tier 1: Global Bloom Filter negative test
+            if (!_globalFilter.MayContain(keyHash)) return false;
+
+            // Tier 2: Binary search on Sparse Blocks
+            int low = 0;
+            int high = _blocks.Length - 1;
+            int candidateBlock = -1;
+
+            while (low <= high)
+            {
+                int mid = low + ((high - low) >> 1);
+                if (keyHash < _blocks[mid].MinKeyHash) high = mid - 1;
+                else if (keyHash > _blocks[mid].MaxKeyHash) low = mid + 1;
+                else { candidateBlock = mid; break; }
+            }
+
+            if (candidateBlock == -1) return false;
+
+            // Tier 3: Micro-Bloom Mask Check
+            ulong bit = 1UL << (int)(keyHash % 64);
+            if ((_blocks[candidateBlock].MicroBloomMask & bit) == 0) return false;
+
+            // Tier 4: Binary search inside the selected block slots
+            var slots = _blockSlots[candidateBlock];
+            int sLow = 0;
+            int sHigh = slots.Length - 1;
+
+            while (sLow <= sHigh)
+            {
+                int sMid = sLow + ((sHigh - sLow) >> 1);
+                if (slots[sMid].KeyHash == keyHash)
+                {
+                    // Scan backwards and forwards to collect all slots with this identical hash
+                    int start = sMid;
+                    while (start > 0 && slots[start - 1].KeyHash == keyHash) start--;
+                    int end = sMid;
+                    while (end < slots.Length - 1 && slots[end + 1].KeyHash == keyHash) end++;
+
+                    for (int i = start; i <= end; i++)
+                    {
+                        candidates.Add(slots[i]);
+                    }
+                    return true;
+                }
+
+                if (slots[sMid].KeyHash < keyHash) sLow = sMid + 1;
+                else sHigh = sMid - 1;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Serializes the hierarchical sparse index into a compact binary stream for persistence in .zab.
         /// </summary>
         public void WriteTo(BinaryWriter writer)
