@@ -1697,6 +1697,80 @@ namespace ZeroAgent.Core.Database
             }
         }
 
+        /// <summary>
+        /// Creates a zero-copy memory-mapped file reader directly onto the flushed baseline .zab container.
+        /// Flushes any pending memory state before opening to ensure 100% snapshot freshness.
+        /// </summary>
+        public ZabMMapReader CreateMMapReader()
+        {
+            _rwLock.EnterWriteLock();
+            try
+            {
+                if (_isDirty || _wal.PendingFrames > 0)
+                {
+                    Checkpoint();
+                }
+                return ZabMMapReader.Open(_filePath);
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
+        }
+
+        /// <summary>
+        /// Builds an Inverted File (IVF) Clustered Index over current quantized vectors for sub-linear O(√N) searches.
+        /// </summary>
+        public ZabIvfVectorIndex BuildIvfIndex(int targetClusters = 16)
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                if (_vectors.Count == 0)
+                {
+                    return new ZabIvfVectorIndex(64, targetClusters);
+                }
+
+                int dim = _vectors[0].Dimension;
+                int clusters = Math.Max(2, Math.Min(targetClusters, (int)Math.Sqrt(_vectors.Count) + 1));
+                var ivf = new ZabIvfVectorIndex(dim, clusters);
+
+                for (int i = 0; i < _vectors.Count; i++)
+                {
+                    var vec = _vectors[i];
+                    if (vec.Dimension == dim)
+                    {
+                        float[] dequantized = vec.Dequantize();
+                        ivf.Add(vec, dequantized);
+                    }
+                }
+
+                return ivf;
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Compacts storage by flushing baseline snapshot, removing dead/reclaimed records, and truncating WAL.
+        /// </summary>
+        public void Compact()
+        {
+            _rwLock.EnterWriteLock();
+            try
+            {
+                // Rebuild accelerators and purge any stale structures
+                RebuildTwoStageAccelerator();
+                Checkpoint();
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
+        }
+
         #endregion
 
         public void Dispose()

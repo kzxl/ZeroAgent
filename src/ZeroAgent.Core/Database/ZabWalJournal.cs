@@ -18,12 +18,14 @@ namespace ZeroAgent.Core.Database
         public string WalFilePath => _walFilePath;
         public int PendingFrames => _pendingFrames;
         public int AutoCheckpointThreshold { get; set; } = 500;
+        public long MaxWalSizeBytes { get; set; } = 16 * 1024 * 1024; // 16 MB default threshold
 
-        public ZabWalJournal(string baselineFilePath, int autoCheckpointThreshold = 500)
+        public ZabWalJournal(string baselineFilePath, int autoCheckpointThreshold = 500, long maxWalSizeBytes = 16 * 1024 * 1024)
         {
             if (string.IsNullOrWhiteSpace(baselineFilePath)) throw new ArgumentNullException(nameof(baselineFilePath));
             _walFilePath = baselineFilePath + "-wal";
             AutoCheckpointThreshold = autoCheckpointThreshold;
+            MaxWalSizeBytes = maxWalSizeBytes;
         }
 
         /// <summary>
@@ -120,11 +122,23 @@ namespace ZeroAgent.Core.Database
         }
 
         /// <summary>
-        /// Checks whether the pending frame count has crossed the auto-checkpoint threshold.
+        /// Checks whether the pending frame count or WAL file size has crossed checkpoint thresholds.
         /// </summary>
         public bool ShouldCheckpoint()
         {
-            return _pendingFrames >= AutoCheckpointThreshold;
+            if (_pendingFrames >= AutoCheckpointThreshold) return true;
+            try
+            {
+                if (File.Exists(_walFilePath) && new FileInfo(_walFilePath).Length >= MaxWalSizeBytes)
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Fallback gracefully if file access temporarily contended
+            }
+            return false;
         }
 
         public void Dispose()
