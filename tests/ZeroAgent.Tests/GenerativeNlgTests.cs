@@ -122,5 +122,36 @@ namespace ZeroAgent.Tests
             Assert.Contains("CNC-01", response.Text);
             Assert.Contains("[BÌNH THƯỜNG]", response.Text);
         }
+
+        [Fact]
+        public async Task ZeroDialogEngine_LiveLocalGemma_SynthesizesNaturalResponse()
+        {
+            // Verify live endpoint reachability first
+            using var httpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            try
+            {
+                var ping = await httpClient.GetAsync("http://192.168.10.7:1234/v1/models");
+                if (!ping.IsSuccessStatusCode) return; // Skip if local gateway is offline
+            }
+            catch
+            {
+                return; // Gateway offline in environment
+            }
+
+            var gemmaClient = new ExternalApiLlmClient(
+                endpoint: "http://192.168.10.7:1234/v1/chat/completions",
+                model: "google/gemma-4-e4b",
+                apiKey: "ollama");
+
+            var bot = IndustrialDialogFactory.CreateIndustrialBot(enableNeuralClassifier: true);
+            bot.UseGenerativeNlg(gemmaClient);
+
+            var response = await bot.ChatAsync("session_live_gemma_01", "kiểm tra nhiệt độ máy CNC-01");
+
+            Assert.Equal(SessionState.Completed, response.State);
+            Assert.Equal("CHECK_TEMPERATURE", response.IntentName);
+            Assert.False(string.IsNullOrWhiteSpace(response.Text));
+            Assert.Contains("73.5", response.Text);
+        }
     }
 }

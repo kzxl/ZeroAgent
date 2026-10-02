@@ -38,7 +38,7 @@ namespace ZeroAgent.Core.Engine
         /// <summary>
         /// Optional token generation budget.
         /// </summary>
-        public int? MaxTokens { get; set; }
+        public int? MaxTokens { get; set; } = 512;
 
         /// <summary>
         /// Optional default system prompt to include in chat requests.
@@ -186,10 +186,20 @@ namespace ZeroAgent.Core.Engine
                     choices.GetArrayLength() > 0)
                 {
                     var firstChoice = choices[0];
-                    if (firstChoice.TryGetProperty("message", out var message) &&
-                        message.TryGetProperty("content", out var content))
+                    if (firstChoice.TryGetProperty("message", out var message))
                     {
-                        return content.GetString() ?? string.Empty;
+                        if (message.TryGetProperty("content", out var content))
+                        {
+                            string contentStr = content.GetString() ?? string.Empty;
+                            if (!string.IsNullOrWhiteSpace(contentStr)) return contentStr;
+                        }
+
+                        // Support reasoning models (Gemma-4-E4B, DeepSeek-R1, QwQ)
+                        if (message.TryGetProperty("reasoning_content", out var reasoning))
+                        {
+                            string reasoningStr = reasoning.GetString() ?? string.Empty;
+                            if (!string.IsNullOrWhiteSpace(reasoningStr)) return reasoningStr;
+                        }
                     }
 
                     if (firstChoice.TryGetProperty("text", out var text))
