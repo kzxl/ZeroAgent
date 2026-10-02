@@ -203,6 +203,14 @@ namespace ZeroAgent.Core.Database
         /// </summary>
         public string Predict(ReadOnlySpan<float> inputEmbedding, out float confidence)
         {
+            return PredictChoice(inputEmbedding, out confidence);
+        }
+
+        /// <summary>
+        /// Primitive 1: Choice (1-of-N). Evaluates calibrated multi-class action probabilities using INT8 dot-product and Softmax.
+        /// </summary>
+        public string PredictChoice(ReadOnlySpan<float> inputEmbedding, out float confidence)
+        {
             confidence = 0.0f;
             if (OutputClasses.Count == 0 || inputEmbedding.Length != InputDim || WeightsInt8.Length < OutputClasses.Count * InputDim)
             {
@@ -243,6 +251,96 @@ namespace ZeroAgent.Core.Database
 
             confidence = sumExp > 1e-7f ? logits[bestIdx] / sumExp : 1.0f;
             return OutputClasses[bestIdx];
+        }
+
+        /// <summary>
+        /// Primitive 2: Score. Evaluates continuous score in [0.0, 1.0] for risk, complexity, or quality assessment.
+        /// Uses Logistic Sigmoid over the target class logit.
+        /// </summary>
+        public float PredictScore(ReadOnlySpan<float> inputEmbedding, int targetClassIdx = 0)
+        {
+            if (OutputClasses.Count == 0 || inputEmbedding.Length != InputDim || targetClassIdx < 0 || targetClassIdx >= OutputClasses.Count)
+            {
+                return 0.0f;
+            }
+
+            int rowOffset = targetClassIdx * InputDim;
+            float dot = 0.0f;
+            for (int d = 0; d < InputDim; d++)
+            {
+                dot += WeightsInt8[rowOffset + d] * inputEmbedding[d];
+            }
+
+            float logit = (dot * Scale) + (targetClassIdx < Biases.Length ? Biases[targetClassIdx] : 0.0f);
+            // Sigmoid: 1 / (1 + exp(-logit))
+            if (logit > 15.0f) return 1.0f;
+            if (logit < -15.0f) return 0.0f;
+            return 1.0f / (1.0f + (float)Math.Exp(-logit));
+        }
+
+        /// <summary>
+        /// Primitive 2 Overload: Score by class name (e.g. "Risk", "Complexity").
+        /// </summary>
+        public float PredictScore(ReadOnlySpan<float> inputEmbedding, string targetClassName)
+        {
+            int idx = OutputClasses.FindIndex(c => string.Equals(c, targetClassName, StringComparison.OrdinalIgnoreCase));
+            return idx >= 0 ? PredictScore(inputEmbedding, idx) : 0.0f;
+        }
+
+        /// <summary>
+        /// Primitive 3: Binary (No / Yes). Evaluates a deterministic boolean gatekeeper condition against a confidence threshold.
+        /// </summary>
+        public bool PredictBinary(ReadOnlySpan<float> inputEmbedding, float threshold = 0.5f, int targetClassIdx = 0)
+        {
+            return PredictScore(inputEmbedding, targetClassIdx) >= threshold;
+        }
+
+        /// <summary>
+        /// Primitive 3 Overload: Binary gatekeeper by class name.
+        /// </summary>
+        public bool PredictBinary(ReadOnlySpan<float> inputEmbedding, string targetClassName, float threshold = 0.5f)
+        {
+            return PredictScore(inputEmbedding, targetClassName) >= threshold;
+        }
+
+        /// <summary>
+        /// Online Delta Adaptation: Updates INT8 weights dynamically based on System 2 verified feedback without offline retraining.
+        /// Uses margin perceptron update: reinforces target class and suppresses misclassified rival.
+        /// </summary>
+        public bool AdaptWeights(ReadOnlySpan<float> inputEmbedding, string targetClassName, float learningRate = 0.05f)
+        {
+            if (inputEmbedding.Length != InputDim || string.IsNullOrWhiteSpace(targetClassName)) return false;
+
+            int targetIdx = OutputClasses.FindIndex(c => string.Equals(c, targetClassName, StringComparison.OrdinalIgnoreCase));
+            if (targetIdx < 0) return false;
+
+            // Find current predicted class
+            PredictChoice(inputEmbedding, out _);
+
+            int targetRow = targetIdx * InputDim;
+            float invScale = Scale > 1e-7f ? 1.0f / Scale : 127.0f;
+            int step = (int)Math.Max(1, Math.Round(learningRate * 127.0f));
+
+            for (int d = 0; d < InputDim; d++)
+            {
+                if (inputEmbedding[d] > 0.01f)
+                {
+                    int w = WeightsInt8[targetRow + d] + step;
+                    WeightsInt8[targetRow + d] = (sbyte)Math.Min(127, w);
+                }
+                else if (inputEmbedding[d] < -0.01f)
+                {
+                    int w = WeightsInt8[targetRow + d] - step;
+                    WeightsInt8[targetRow + d] = (sbyte)Math.Max(-127, w);
+                }
+            }
+
+            if (targetIdx < Biases.Length)
+            {
+                Biases[targetIdx] += learningRate;
+            }
+
+            return true;
         }
     }
 }

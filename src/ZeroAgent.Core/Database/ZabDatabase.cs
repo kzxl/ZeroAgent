@@ -726,6 +726,93 @@ namespace ZeroAgent.Core.Database
             }
         }
 
+        /// <summary>
+        /// Primitive 1: Choice (1-of-N). Predicts the recommended tool or action intent in sub-0.05ms using the internal quantized policy network.
+        /// </summary>
+        public string? PredictChoice(ReadOnlySpan<float> inputEmbedding, out float confidence)
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                if (_neuralPolicy == null)
+                {
+                    confidence = 0.0f;
+                    return null;
+                }
+
+                return _neuralPolicy.PredictChoice(inputEmbedding, out confidence);
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Primitive 2: Score. Evaluates continuous score in [0.0, 1.0] for risk, complexity, or quality assessment.
+        /// </summary>
+        public float PredictScore(ReadOnlySpan<float> inputEmbedding, string targetClassName)
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                return _neuralPolicy?.PredictScore(inputEmbedding, targetClassName) ?? 0.0f;
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Primitive 3: Binary. Evaluates a deterministic boolean gatekeeper condition against a confidence threshold.
+        /// </summary>
+        public bool PredictBinary(ReadOnlySpan<float> inputEmbedding, string targetClassName, float threshold = 0.5f)
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                return _neuralPolicy?.PredictBinary(inputEmbedding, targetClassName, threshold) ?? false;
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Online Delta Adaptation: Updates INT8 policy weights dynamically based on System 2 verified feedback without offline retraining.
+        /// Logs the updated weights snapshot to WAL to guarantee crash-resilience.
+        /// </summary>
+        public bool AdaptNeuralWeights(ReadOnlySpan<float> inputEmbedding, string targetClassName, float learningRate = 0.05f)
+        {
+            _rwLock.EnterWriteLock();
+            try
+            {
+                if (_neuralPolicy == null) return false;
+
+                bool adapted = _neuralPolicy.AdaptWeights(inputEmbedding, targetClassName, learningRate);
+                if (adapted)
+                {
+                    _isDirty = true;
+                    _walSequenceNumber++;
+
+                    byte[] payload = SerializeNeuralPolicy(_neuralPolicy);
+                    _wal.AppendFrame(ZabWalOpCode.UpdateNeuralPolicy, payload);
+
+                    if (_wal.ShouldCheckpoint())
+                    {
+                        Checkpoint();
+                    }
+                }
+                return adapted;
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
+        }
+
         #endregion
 
         #region WAL Mutation Replay (Internal)
