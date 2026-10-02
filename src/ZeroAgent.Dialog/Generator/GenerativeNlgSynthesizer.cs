@@ -57,6 +57,10 @@ namespace ZeroAgent.Dialog.Generator
         {
             var sb = new StringBuilder();
             sb.AppendLine("Hệ thống: Bạn là trợ lý AI chuyên môn cao cho giải pháp công nghiệp và ERP.");
+            if (!string.IsNullOrWhiteSpace(context.Domain))
+            {
+                sb.AppendLine($"Phân hệ chuyên môn: {context.Domain}");
+            }
             sb.AppendLine($"Phong cách phản hồi: {context.PersonaStyle}.");
             sb.AppendLine("Quy tắc bắt buộc:");
             sb.AppendLine("1. Trả lời bằng Tiếng Việt tự nhiên, đúng ngữ pháp, mạch lạc, ngắn gọn và lịch thiệp.");

@@ -16,6 +16,7 @@ namespace ZeroAgent.Dialog.DST
         public Dictionary<string, string> SlotClarificationPrompts { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public List<string> ResponseTemplates { get; } = new List<string>();
         public Func<DialogueSession, Task<string>>? ActionHandler { get; set; }
+        public string? Domain { get; set; }
 
         public DialogueIntent(string name, string description)
         {
@@ -45,6 +46,12 @@ namespace ZeroAgent.Dialog.DST
         public DialogueIntent AddTemplates(params string[] templates)
         {
             ResponseTemplates.AddRange(templates);
+            return this;
+        }
+
+        public DialogueIntent WithDomain(string domain)
+        {
+            Domain = domain;
             return this;
         }
     }

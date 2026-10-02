@@ -70,7 +70,8 @@ namespace ZeroAgent.Dialog.Engine
                 intent.ResponseTemplates,
                 actionOutput)
             {
-                PersonaStyle = personaDescription
+                PersonaStyle = personaDescription,
+                Domain = intent.Domain ?? session.ActiveDomain
             };
 
             string finalResponse = await NlgSynthesizer.SynthesizeAsync(nlgContext).ConfigureAwait(false);

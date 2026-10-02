@@ -119,6 +119,70 @@ namespace ZeroAgent.Dialog.DST
             {
                 session.SetSlot("tableName", tableMatch.Value);
             }
+
+            // === Standard ERP Entity Extractors ===
+            // 1. SKU / Material Code
+            var skuMatch = Regex.Match(text, @"\b(SKU-[A-Za-z0-9_\-]+|VT-[A-Za-z0-9_\-]+|NVL-[A-Za-z0-9_\-]+|SP-[A-Za-z0-9_\-]+|TP-[A-Za-z0-9_\-]+)\b", RegexOptions.IgnoreCase);
+            if (skuMatch.Success)
+            {
+                session.SetSlot("item_code", skuMatch.Value.ToUpperInvariant());
+                session.SetSlot("sku", skuMatch.Value.ToUpperInvariant());
+            }
+
+            // 2. Warehouse ID / Name
+            var whMatch = Regex.Match(text, @"\b(KHO-[A-Za-z0-9_\-]+|WH-[A-Za-z0-9_\-]+|kho tổng|kho nguyên liệu|kho thành phẩm|kho vật tư|kho phụ liệu|kho hà nội|kho hcm)\b", RegexOptions.IgnoreCase);
+            if (whMatch.Success)
+            {
+                session.SetSlot("warehouse_id", whMatch.Value.Trim());
+            }
+
+            // 3. Purchase Order (PO)
+            var poMatch = Regex.Match(text, @"\b(PO-[A-Za-z0-9_\-]+|PO\d{3,})\b", RegexOptions.IgnoreCase);
+            if (poMatch.Success)
+            {
+                session.SetSlot("po_number", poMatch.Value.ToUpperInvariant());
+            }
+
+            // 4. Sales Order (SO)
+            var soMatch = Regex.Match(text, @"\b(SO-[A-Za-z0-9_\-]+|SO\d{3,})\b", RegexOptions.IgnoreCase);
+            if (soMatch.Success)
+            {
+                session.SetSlot("so_number", soMatch.Value.ToUpperInvariant());
+            }
+
+            // 5. Manufacturing Order / Work Order (MO / WO / LSX)
+            var moMatch = Regex.Match(text, @"\b(MO-[A-Za-z0-9_\-]+|WO-[A-Za-z0-9_\-]+|LSX-[A-Za-z0-9_\-]+)\b", RegexOptions.IgnoreCase);
+            if (moMatch.Success)
+            {
+                session.SetSlot("mo_number", moMatch.Value.ToUpperInvariant());
+            }
+
+            // 6. Customer / Supplier (NCC / KH / Đối tác)
+            var partnerMatch = Regex.Match(text, @"\b(KH-[A-Za-z0-9_\-]+|NCC-[A-Za-z0-9_\-]+|khách hàng\s+([A-Za-z0-9_\-]+)|nhà cung cấp\s+([A-Za-z0-9_\-]+)|công ty\s+([A-Za-z0-9_\-]+))\b", RegexOptions.IgnoreCase);
+            if (partnerMatch.Success)
+            {
+                string partnerVal = partnerMatch.Value.Trim();
+                if (partnerVal.StartsWith("khách hàng", StringComparison.OrdinalIgnoreCase) || partnerVal.StartsWith("KH-", StringComparison.OrdinalIgnoreCase))
+                {
+                    session.SetSlot("customer_id", partnerVal);
+                }
+                else if (partnerVal.StartsWith("nhà cung cấp", StringComparison.OrdinalIgnoreCase) || partnerVal.StartsWith("NCC-", StringComparison.OrdinalIgnoreCase))
+                {
+                    session.SetSlot("supplier_id", partnerVal);
+                }
+                else
+                {
+                    session.SetSlot("partner_name", partnerVal);
+                }
+            }
+
+            // 7. Quantity with unit: e.g. 500 cái, 20 kg, 100 tấn
+            var qtyMatch = Regex.Match(text, @"\b(\d+)\s*(cái|chiếc|bộ|kg|tấn|thùng|hộp|cuộn|mét|m|pcs)\b", RegexOptions.IgnoreCase);
+            if (qtyMatch.Success)
+            {
+                session.SetSlot("quantity", qtyMatch.Groups[1].Value);
+                session.SetSlot("unit", qtyMatch.Groups[2].Value.ToLowerInvariant());
+            }
         }
 
         private static string ExtractSlotValue(string text, string slotName)
@@ -135,6 +199,31 @@ namespace ZeroAgent.Dialog.DST
             {
                 var m = Regex.Match(text, @"\b(factory_machines|SampleData|production_lines|telemetry_logs|[a-zA-Z0-9_]+)\b", RegexOptions.IgnoreCase);
                 if (m.Success) return m.Value;
+            }
+            else if (slotName.Equals("item_code", StringComparison.OrdinalIgnoreCase) || slotName.Equals("sku", StringComparison.OrdinalIgnoreCase))
+            {
+                var m = Regex.Match(text, @"\b(SKU-[A-Za-z0-9_\-]+|VT-[A-Za-z0-9_\-]+|NVL-[A-Za-z0-9_\-]+|SP-[A-Za-z0-9_\-]+|TP-[A-Za-z0-9_\-]+)\b", RegexOptions.IgnoreCase);
+                if (m.Success) return m.Value.ToUpperInvariant();
+            }
+            else if (slotName.Equals("warehouse_id", StringComparison.OrdinalIgnoreCase))
+            {
+                var m = Regex.Match(text, @"\b(KHO-[A-Za-z0-9_\-]+|WH-[A-Za-z0-9_\-]+|kho tổng|kho nguyên liệu|kho thành phẩm|kho vật tư|kho phụ liệu|kho hà nội|kho hcm)\b", RegexOptions.IgnoreCase);
+                if (m.Success) return m.Value.Trim();
+            }
+            else if (slotName.Equals("so_number", StringComparison.OrdinalIgnoreCase))
+            {
+                var m = Regex.Match(text, @"\b(SO-[A-Za-z0-9_\-]+|SO\d{3,})\b", RegexOptions.IgnoreCase);
+                if (m.Success) return m.Value.ToUpperInvariant();
+            }
+            else if (slotName.Equals("po_number", StringComparison.OrdinalIgnoreCase))
+            {
+                var m = Regex.Match(text, @"\b(PO-[A-Za-z0-9_\-]+|PO\d{3,})\b", RegexOptions.IgnoreCase);
+                if (m.Success) return m.Value.ToUpperInvariant();
+            }
+            else if (slotName.Equals("mo_number", StringComparison.OrdinalIgnoreCase))
+            {
+                var m = Regex.Match(text, @"\b(MO-[A-Za-z0-9_\-]+|WO-[A-Za-z0-9_\-]+|LSX-[A-Za-z0-9_\-]+)\b", RegexOptions.IgnoreCase);
+                if (m.Success) return m.Value.ToUpperInvariant();
             }
             return string.Empty;
         }

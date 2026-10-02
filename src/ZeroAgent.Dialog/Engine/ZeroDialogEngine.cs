@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using ZeroAgent.Core.Engine;
+using ZeroAgent.Core.Reasoning.Cognitive;
 using ZeroAgent.Core.Tools;
 using ZeroAgent.Dialog.DST;
 using ZeroAgent.Dialog.Generator;
@@ -25,6 +26,7 @@ namespace ZeroAgent.Dialog.Engine
         public DialogueResponseGenerator Generator { get; } = new DialogueResponseGenerator();
         public INlgSynthesizer NlgSynthesizer { get; set; }
         public HitlSafetyGate? SafetyGate { get; }
+        public ZabMixtureOfReflexes? MoEReflexSuite { get; set; }
 
         /// <summary>
         /// Two-Tier cognitive escalation handler.
@@ -93,6 +95,23 @@ namespace ZeroAgent.Dialog.Engine
             // Step 2: Vector embedding
             var queryEmbedding = Memory.Embedder.Embed(resolvedMessage);
 
+            // Step 2.1: Mixture of Reflexes (MoR) / Modular MoE Domain & Security Gating
+            if (MoEReflexSuite != null)
+            {
+                var reflex = MoEReflexSuite.Evaluate(queryEmbedding);
+                if (reflex.IsBlockedBySecurity)
+                {
+                    string secMsg = "Cảnh báo an ninh: Yêu cầu của bạn bị từ chối do vi phạm quy tắc an toàn bảo mật hệ thống.";
+                    workingMemory.AddTurn(userMessage, secMsg, "SECURITY_BLOCK");
+                    return new DialogResponse(secMsg, SessionState.Idle, "SECURITY_BLOCK", confidence: reflex.SecurityRiskScore);
+                }
+
+                if (!string.IsNullOrEmpty(reflex.MatchedDomainId) && reflex.DomainAffinityScore >= 0.20f)
+                {
+                    session.ActiveDomain = reflex.MatchedDomainId;
+                }
+            }
+
             // Step 2.5: Check Semantic Response Cache (Short-circuit NLU/LLM if similarity >= 0.95 and session is idle/completed)
             if (session.State == SessionState.Idle || session.State == SessionState.Completed)
             {
@@ -137,6 +156,11 @@ namespace ZeroAgent.Dialog.Engine
 
             // Step 6: Advance Dialogue State
             Dst.AdvanceSession(session, resolvedMessage, detectedIntent);
+
+            if (session.CurrentIntent != null && !string.IsNullOrEmpty(session.CurrentIntent.Domain))
+            {
+                session.ActiveDomain = session.CurrentIntent.Domain;
+            }
 
             foreach (var kvp in session.Slots)
             {

@@ -17,6 +17,7 @@ namespace ZeroAgent.Dialog.Generator
         public IReadOnlyList<string> FallbackTemplates { get; }
         public string FallbackDefault { get; }
         public string PersonaStyle { get; set; } = "kỹ sư ERP chuyên nghiệp, lịch sự, chính xác";
+        public string? Domain { get; set; }
 
         public NlgContext(
             string userQuery,

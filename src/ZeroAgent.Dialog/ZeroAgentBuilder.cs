@@ -24,9 +24,16 @@ namespace ZeroAgent.Dialog
         private string? _reactRole;
         private string? _liveSqlConnStr;
         private string _liveSqlDbName = "LiveDB";
+        private bool _useErpPreset = false;
         private Action<AgentToolRegistry>? _customToolConfig;
 
         public static ZeroAgentBuilder Create() => new ZeroAgentBuilder();
+
+        public ZeroAgentBuilder WithErpPreset(bool enable = true)
+        {
+            _useErpPreset = enable;
+            return this;
+        }
 
         public ZeroAgentBuilder WithVectorDimension(int dimension)
         {
@@ -99,7 +106,9 @@ namespace ZeroAgent.Dialog
 
             _customToolConfig?.Invoke(registry);
 
-            var engine = IndustrialDialogFactory.CreateIndustrialBot(safetyGate, registry, _enableNeuralClassifier, _dimension);
+            var engine = _useErpPreset
+                ? ErpDialogFactory.CreateErpBot(registry, safetyGate, _dimension)
+                : IndustrialDialogFactory.CreateIndustrialBot(safetyGate, registry, _enableNeuralClassifier, _dimension);
 
             if (_llmClient != null)
             {

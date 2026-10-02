@@ -20,6 +20,7 @@ namespace ZeroAgent.Dialog.DST
         public string SessionId { get; }
         public SessionState State { get; set; } = SessionState.Idle;
         public DialogueIntent? CurrentIntent { get; set; }
+        public string? ActiveDomain { get; set; }
         public Dictionary<string, string> Slots { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public string? PendingRequiredSlot { get; set; }
 
@@ -48,6 +49,7 @@ namespace ZeroAgent.Dialog.DST
         {
             State = SessionState.Idle;
             CurrentIntent = null;
+            ActiveDomain = null;
             Slots.Clear();
             PendingRequiredSlot = null;
         }
