@@ -156,7 +156,16 @@ namespace ZeroAgent.Dialog.Memory
                                 emb = engine.Embedder.Embed(issue);
                             }
 
-                            engine.Episodic.Record(issue, resolution, emb, success, halfLife);
+                            int accessCount = root.TryGetProperty("AccessCount", out var ac) ? ac.GetInt32() : 1;
+                            DateTime? lastAccessed = root.TryGetProperty("LastAccessedUtc", out var la) && la.ValueKind == JsonValueKind.String
+                                ? DateTime.Parse(la.GetString()!) : (DateTime?)null;
+
+                            var ep = engine.Episodic.Record(issue, resolution, emb, success, halfLife);
+                            if (ep != null)
+                            {
+                                ep.AccessCount = accessCount;
+                                if (lastAccessed.HasValue) ep.LastAccessedUtc = lastAccessed.Value;
+                            }
                         }
                     }
                     catch { }
