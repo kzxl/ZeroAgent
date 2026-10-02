@@ -16,25 +16,42 @@ namespace ZeroAgent.Core.Reasoning.Cognitive
         public float CacheAffinityScore { get; set; }
         public bool ShouldCheckCache => CacheAffinityScore >= 0.70f;
         public bool IsConfident => !IsBlockedBySecurity && RoutingConfidence >= 0.85f;
+
+        public string? MatchedDomainId { get; set; }
+        public float DomainAffinityScore { get; set; }
+        public IDomainExpertModule? MatchedExpert { get; set; }
     }
 
     /// <summary>
-    /// Mixture of Reflexes (MoR) Engine composed of gated domain-specific neural policies.
-    /// Distributes cognitive load across specialized INT8 micro-experts:
+    /// Mixture of Reflexes (MoR) Engine composed of gated domain-specific neural policies and modular domain experts.
+    /// Distributes cognitive load across specialized INT8 micro-experts and plug-and-play domain clusters:
     /// 1. Action Routing Expert (determines optimal tool or action)
     /// 2. Security Guardrail Expert (detects dangerous commands and prompt injections)
     /// 3. Memory Retrieval Affinity Expert (predicts cache hits)
+    /// 4. Modular Domain Experts (pluggable ERP/Industrial clusters e.g. Inventory, Finance, Production)
     /// </summary>
     public sealed class ZabMixtureOfReflexes
     {
         private ZabNeuralPolicy? _routingExpert;
         private ZabNeuralPolicy? _securityExpert;
         private ZabNeuralPolicy? _cacheExpert;
+        private readonly Dictionary<string, IDomainExpertModule> _domainExperts = new Dictionary<string, IDomainExpertModule>(StringComparer.OrdinalIgnoreCase);
         private readonly object _lock = new object();
 
         public ZabNeuralPolicy? RoutingExpert => _routingExpert;
         public ZabNeuralPolicy? SecurityExpert => _securityExpert;
         public ZabNeuralPolicy? CacheExpert => _cacheExpert;
+
+        public IReadOnlyCollection<IDomainExpertModule> DomainExperts
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return new List<IDomainExpertModule>(_domainExperts.Values);
+                }
+            }
+        }
 
         public ZabMixtureOfReflexes(
             ZabNeuralPolicy? routingExpert = null,
@@ -59,6 +76,32 @@ namespace ZeroAgent.Core.Reasoning.Cognitive
         public void RegisterCacheExpert(ZabNeuralPolicy policy)
         {
             lock (_lock) _cacheExpert = policy ?? throw new ArgumentNullException(nameof(policy));
+        }
+
+        public void RegisterDomainExpert(IDomainExpertModule expert)
+        {
+            if (expert == null) throw new ArgumentNullException(nameof(expert));
+            lock (_lock)
+            {
+                _domainExperts[expert.DomainId] = expert;
+            }
+        }
+
+        public bool UnregisterDomainExpert(string domainId)
+        {
+            if (string.IsNullOrWhiteSpace(domainId)) return false;
+            lock (_lock)
+            {
+                return _domainExperts.Remove(domainId);
+            }
+        }
+
+        public bool TryGetDomainExpert(string domainId, out IDomainExpertModule? expert)
+        {
+            lock (_lock)
+            {
+                return _domainExperts.TryGetValue(domainId, out expert);
+            }
         }
 
         /// <summary>
@@ -92,6 +135,30 @@ namespace ZeroAgent.Core.Reasoning.Cognitive
                 if (_cacheExpert != null && _cacheExpert.InputDim == inputEmbedding.Length)
                 {
                     result.CacheAffinityScore = _cacheExpert.PredictScore(inputEmbedding, "CacheAffinity");
+                }
+
+                // 4. Modular MoE Domain Expert Matching
+                if (_domainExperts.Count > 0)
+                {
+                    float bestScore = 0f;
+                    IDomainExpertModule? bestExpert = null;
+
+                    foreach (var expert in _domainExperts.Values)
+                    {
+                        float score = expert.EvaluateAffinity(inputEmbedding);
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            bestExpert = expert;
+                        }
+                    }
+
+                    if (bestExpert != null)
+                    {
+                        result.MatchedDomainId = bestExpert.DomainId;
+                        result.DomainAffinityScore = bestScore;
+                        result.MatchedExpert = bestExpert;
+                    }
                 }
             }
 

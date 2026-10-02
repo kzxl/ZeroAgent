@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using ZeroAgent.Core.Engine;
 using ZeroAgent.Core.Tools;
 using ZeroAgent.Dialog.DST;
 using ZeroAgent.Dialog.Generator;
@@ -22,6 +23,7 @@ namespace ZeroAgent.Dialog.Engine
         public DialogueStateTracker Dst { get; }
         public AgentToolRegistry Tools { get; }
         public DialogueResponseGenerator Generator { get; } = new DialogueResponseGenerator();
+        public INlgSynthesizer NlgSynthesizer { get; set; }
         public HitlSafetyGate? SafetyGate { get; }
 
         /// <summary>
@@ -46,6 +48,16 @@ namespace ZeroAgent.Dialog.Engine
             CognitiveEscalationHandler = bridge.EscalateAsync;
         }
 
+        /// <summary>
+        /// Enables generative natural language synthesis using the specified LLM client (Micro-SLM, 9Router, or External API).
+        /// Automatically falls back to deterministic template rendering when the generative model is unavailable.
+        /// </summary>
+        public void UseGenerativeNlg(ILlmClient llmClient, string? customSystemDirective = null)
+        {
+            if (llmClient == null) throw new ArgumentNullException(nameof(llmClient));
+            NlgSynthesizer = new GenerativeNlgSynthesizer(llmClient, new TemplateFallbackNlgSynthesizer(Generator), customSystemDirective);
+        }
+
         public ZeroDialogEngine(
             AgentToolRegistry? tools = null, 
             HitlSafetyGate? safetyGate = null, 
@@ -57,6 +69,7 @@ namespace ZeroAgent.Dialog.Engine
             Memory = new AgenticMemoryEngine(dimension);
             Dst = new DialogueStateTracker(Memory.Embedder);
             Sessions = sessionStore ?? new InMemoryDialogSessionStore();
+            NlgSynthesizer = new TemplateFallbackNlgSynthesizer(Generator);
         }
 
         /// <summary>

@@ -145,5 +145,84 @@ namespace ZeroAgent.Tests
             Assert.True(hostileResult.IsBlockedBySecurity);
             Assert.True(hostileResult.SecurityRiskScore >= 0.80f);
         }
+
+        [Fact]
+        public void ZabMixtureOfReflexes_SupportsPlugAndPlayDomainExperts_ForModularMoe()
+        {
+            const int dim = 32;
+            var mor = new ZabMixtureOfReflexes();
+
+            // 1. Create 2 Domain Experts (Inventory vs Finance)
+            float[] invCentroid = new float[dim];
+            invCentroid[0] = 1.0f; // Dimension 0 corresponds to Inventory concepts
+
+            float[] finCentroid = new float[dim];
+            finCentroid[1] = 1.0f; // Dimension 1 corresponds to Finance concepts
+
+            var invExpert = new DomainExpertModule(
+                domainId: "inventory",
+                displayName: "Kho & Vật tư",
+                description: "Quản lý phiếu nhập xuất, tồn kho, vị trí kệ",
+                handledIntents: new[] { "CHECK_STOCK", "CREATE_GRN" },
+                centroidEmbedding: invCentroid);
+
+            var finExpert = new DomainExpertModule(
+                domainId: "finance",
+                displayName: "Tài chính & Công nợ",
+                description: "Quản lý hóa đơn, công nợ phải thu, sổ cái",
+                handledIntents: new[] { "QUERY_DEBT", "APPROVE_PAYMENT" },
+                centroidEmbedding: finCentroid);
+
+            // 2. Register experts into MoR
+            mor.RegisterDomainExpert(invExpert);
+            mor.RegisterDomainExpert(finExpert);
+
+            Assert.Equal(2, mor.DomainExperts.Count);
+
+            // 3. Query with Inventory Vector
+            float[] queryInv = new float[dim];
+            queryInv[0] = 0.95f; queryInv[2] = 0.05f;
+
+            var resultInv = mor.Evaluate(queryInv);
+            Assert.Equal("inventory", resultInv.MatchedDomainId);
+            Assert.True(resultInv.DomainAffinityScore > 0.90f);
+            Assert.NotNull(resultInv.MatchedExpert);
+            Assert.Equal("Kho & Vật tư", resultInv.MatchedExpert!.DisplayName);
+
+            // 4. Query with Finance Vector
+            float[] queryFin = new float[dim];
+            queryFin[1] = 0.98f;
+
+            var resultFin = mor.Evaluate(queryFin);
+            Assert.Equal("finance", resultFin.MatchedDomainId);
+            Assert.True(resultFin.DomainAffinityScore > 0.95f);
+
+            // 5. Plug-and-Play: Dynamically add a third expert (Production) at runtime
+            float[] prodCentroid = new float[dim];
+            prodCentroid[2] = 1.0f;
+
+            var prodExpert = new DomainExpertModule(
+                domainId: "production",
+                displayName: "Lệnh Sản xuất & BOM",
+                description: "Quản lý công đoạn, định mức tiêu hao, lệnh gia công",
+                handledIntents: new[] { "CHECK_BOM", "CREATE_WORK_ORDER" },
+                centroidEmbedding: prodCentroid);
+
+            mor.RegisterDomainExpert(prodExpert);
+            Assert.Equal(3, mor.DomainExperts.Count);
+
+            float[] queryProd = new float[dim];
+            queryProd[2] = 1.0f;
+
+            var resultProd = mor.Evaluate(queryProd);
+            Assert.Equal("production", resultProd.MatchedDomainId);
+            Assert.True(resultProd.DomainAffinityScore > 0.95f);
+
+            // 6. Dynamically unregister an expert
+            bool removed = mor.UnregisterDomainExpert("finance");
+            Assert.True(removed);
+            Assert.Equal(2, mor.DomainExperts.Count);
+            Assert.False(mor.TryGetDomainExpert("finance", out _));
+        }
     }
 }

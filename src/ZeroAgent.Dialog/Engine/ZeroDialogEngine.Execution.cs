@@ -53,7 +53,27 @@ namespace ZeroAgent.Dialog.Engine
             // Record successful action into slots for template rendering
             session.SetSlot("output", actionOutput);
 
-            string finalResponse = Generator.FormatResponse(intent.ResponseTemplates, session.Slots, actionOutput);
+            string personaDescription = userProfile.Persona.Tone switch
+            {
+                CommunicationTone.Formal => "trang trọng, chính xác, lịch sự",
+                CommunicationTone.Respectful => "kính trọng, chu đáo, lễ phép",
+                CommunicationTone.Friendly => "thân thiện, cởi mở, hỗ trợ nhiệt tình",
+                CommunicationTone.Casual => "gần gũi, tự nhiên, dứt khoát",
+                CommunicationTone.Direct => "ngắn gọn, trực tiếp, tập trung vào số liệu",
+                _ => "kỹ sư chuyên nghiệp, lịch sự, chính xác"
+            };
+
+            var nlgContext = new ZeroAgent.Dialog.Generator.NlgContext(
+                userMessage,
+                intent.Name,
+                session.Slots,
+                intent.ResponseTemplates,
+                actionOutput)
+            {
+                PersonaStyle = personaDescription
+            };
+
+            string finalResponse = await NlgSynthesizer.SynthesizeAsync(nlgContext).ConfigureAwait(false);
             workingMemory.AddTurn(userMessage, finalResponse, intent.Name);
 
             // Populate semantic response cache safely:
