@@ -34,7 +34,6 @@ namespace ZeroAgent.Tests
         public void Risk1_HashCollision_ExactStringVerificationResolvesCorrectRecord()
         {
             string keyAlpha = "CollisionKey_Alpha";
-            string keyBeta = "CollisionKey_Beta";
             // Simulate 2 distinct keys sharing an identical 64-bit hash
             ulong sharedHash = FastHash.Fnv1a64(keyAlpha.AsSpan());
 
