@@ -160,5 +160,36 @@ namespace ZeroAgent.Tests
             Assert.Equal("call_batch_2", responses[1].CallId);
             Assert.True(responses[1].Success);
         }
+
+        [Fact]
+        public void ToolCallParser_XmlTags_ParsesCorrectly()
+        {
+            string output = "<thought>Kiểm tra số dư lô hàng</thought><tool_call>{\"name\": \"mds_db_lot_balance_query\", \"arguments\": {\"lot_number\": \"14G24FIL002\"}}</tool_call>";
+            bool ok = ToolCallParser.TryParseToolCall(output, out var req);
+
+            Assert.True(ok);
+            Assert.Equal("mds_db_lot_balance_query", req.ToolName);
+            Assert.Contains("14G24FIL002", req.ArgumentsJson);
+        }
+
+        [Fact]
+        public void ToolCallParser_SafeRepairJson_RepairsMalformedAndTruncatedJson()
+        {
+            // Truncated JSON without closing braces
+            string truncated = "<tool_call>{\"name\": \"mds_db_lot_balance_query\", \"arguments\": {\"lot_number\": \"14G24FIL002\"";
+            bool ok = ToolCallParser.TryParseToolCall(truncated, out var req);
+
+            Assert.True(ok);
+            Assert.Equal("mds_db_lot_balance_query", req.ToolName);
+            Assert.Contains("14G24FIL002", req.ArgumentsJson);
+
+            // Single quotes and trailing comma
+            string malformed = "{'name': 'mds_db_low_stock_alert', 'arguments': {'threshold_kg': 50,}}";
+            bool ok2 = ToolCallParser.TryParseJsonPayload(malformed, out var req2);
+
+            Assert.True(ok2);
+            Assert.Equal("mds_db_low_stock_alert", req2.ToolName);
+            Assert.Contains("50", req2.ArgumentsJson);
+        }
     }
 }
