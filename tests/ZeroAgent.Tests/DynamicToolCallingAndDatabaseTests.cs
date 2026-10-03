@@ -253,5 +253,36 @@ namespace ZeroAgent.Tests
             Assert.Contains("\"success\":true", resAllow.Content);
             Assert.Contains("Cancelled", resAllow.Content);
         }
+
+        [Fact]
+        public async Task MdsDatabaseToolkit_SalesOrder_FulfillmentPlan_IntegratesProductionWorkOrderAndPurchaseOrder()
+        {
+            var registry = new AgentToolRegistry();
+            MdsDatabaseToolkit.RegisterAll(registry);
+
+            // sal26-Test needs 200 SP-KHAY-01. WorkOrder WO-2026-MDS01 is producing it on LINE-MOLDING-02!
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_fulfillment_plan", "{\"order_id\": \"sal26-Test\"}"));
+            Assert.True(res.Success);
+            Assert.Contains("sal26-Test", res.Content);
+            Assert.Contains("WO-2026-MDS01", res.Content);
+            Assert.Contains("LINE-MOLDING-02", res.Content);
+            Assert.Contains("FULFILL_WITH_PRODUCTION", res.Content);
+        }
+
+        [Fact]
+        public async Task MdsDatabaseToolkit_InventoryLotTracking_RanksLotsByFEFO_AndWarnsNearExpiry()
+        {
+            var registry = new AgentToolRegistry();
+            MdsDatabaseToolkit.RegisterAll(registry);
+
+            // Query NVL-PP-500. LOT-2025-PP09 expires in 25 days, LOT-2026-PP43 in 320 days.
+            // FEFO priority 1 must be LOT-2025-PP09!
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_inv_lot_tracking", "{\"material_or_lot\": \"NVL-PP-500\"}"));
+            Assert.True(res.Success);
+            Assert.Contains("LOT-2025-PP09", res.Content);
+            Assert.Contains("LOT-2026-PP43", res.Content);
+            Assert.Contains("First-Expired, First-Out", res.Content);
+            Assert.Contains("CẬN DATE", res.Content);
+        }
     }
 }

@@ -93,9 +93,57 @@ namespace ZeroAgent.Tools.Erp
             public double DeliveryProgressPercent => TotalOrderQty > 0 ? Math.Round(TotalDeliveredQty / TotalOrderQty * 100.0, 1) : 0.0;
         }
 
+        public sealed class WorkOrderRecord
+        {
+            public string WorkOrderNo { get; set; } = string.Empty;
+            public string RelatedOrderId { get; set; } = string.Empty;
+            public string ProductCode { get; set; } = string.Empty;
+            public string ProductName { get; set; } = string.Empty;
+            public double TargetQuantity { get; set; }
+            public double CompletedQuantity { get; set; }
+            public double ScrapQuantity { get; set; }
+            public string Status { get; set; } = "InProduction"; // Planned, InProduction, Completed, Paused
+            public string LineCode { get; set; } = "LINE-01";
+            public DateTime PlannedStartDate { get; set; } = DateTime.Today;
+            public DateTime PlannedEndDate { get; set; } = DateTime.Today.AddDays(2);
+            public double ProgressPercent => TargetQuantity > 0 ? Math.Round(CompletedQuantity / TargetQuantity * 100.0, 1) : 0.0;
+        }
+
+        public sealed class PurchaseOrderRecord
+        {
+            public string PoNumber { get; set; } = string.Empty;
+            public string SupplierCode { get; set; } = string.Empty;
+            public string SupplierName { get; set; } = string.Empty;
+            public string MaterialCode { get; set; } = string.Empty;
+            public string MaterialName { get; set; } = string.Empty;
+            public double OrderQuantity { get; set; }
+            public double ReceivedQuantity { get; set; }
+            public DateTime OrderDate { get; set; } = DateTime.Today.AddDays(-5);
+            public DateTime EtaDate { get; set; } = DateTime.Today.AddDays(1);
+            public string Status { get; set; } = "Shipping"; // Confirmed, Shipping, Received
+        }
+
+        public sealed class MaterialLotDetailRecord
+        {
+            public string LotNumber { get; set; } = string.Empty;
+            public string MaterialCode { get; set; } = string.Empty;
+            public string MaterialName { get; set; } = string.Empty;
+            public string WarehouseCode { get; set; } = "KNVLSX";
+            public string LocationCode { get; set; } = "A-01-01"; // Kệ, Pallet
+            public double Quantity { get; set; }
+            public string Unit { get; set; } = "kg";
+            public DateTime MfgDate { get; set; } = DateTime.Today.AddDays(-30);
+            public DateTime ExpDate { get; set; } = DateTime.Today.AddDays(335);
+            public string QCStatus { get; set; } = "Approved"; // Approved, Quarantine, Rejected
+            public bool IsExpired => DateTime.Today > ExpDate;
+        }
+
         private static readonly ConcurrentDictionary<string, LotBalanceRecord> LotBalances = new ConcurrentDictionary<string, LotBalanceRecord>(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, StockInRecord> StockInTickets = new ConcurrentDictionary<string, StockInRecord>(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, SalesOrderRecord> SalesOrders = new ConcurrentDictionary<string, SalesOrderRecord>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, WorkOrderRecord> WorkOrders = new ConcurrentDictionary<string, WorkOrderRecord>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, PurchaseOrderRecord> PurchaseOrders = new ConcurrentDictionary<string, PurchaseOrderRecord>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, MaterialLotDetailRecord> MaterialLots = new ConcurrentDictionary<string, MaterialLotDetailRecord>(StringComparer.OrdinalIgnoreCase);
         public const string DefaultTestConnectionString = "Server=192.168.19.70,1433;Database=MDSManagement;User Id=testing;Password=268479#Kzx;TrustServerCertificate=True;Connect Timeout=5;";
         private static Func<IDbConnection>? _liveDbFactory;
 
@@ -286,11 +334,177 @@ namespace ZeroAgent.Tools.Erp
                     new SalesOrderDetailRecord { No = 2, ProductCode = "NVL-HDPE-600", ProductName = "Hạt nhựa HDPE ép đùn màng", Quantity = 5000, Price = 42000, Unit = "kg", DeliveredQty = 2500, LotTM = "LOT-2026-HDPE12" }
                 }
             });
+
+            // 4. Seed tbPROD_WorkOrder (Lệnh sản xuất)
+            WorkOrders.Clear();
+            AddWorkOrder(new WorkOrderRecord
+            {
+                WorkOrderNo = "WO-2026-MDS01",
+                RelatedOrderId = "sal26-Test",
+                ProductCode = "SP-KHAY-01",
+                ProductName = "Khay nhựa linh kiện chống tĩnh điện",
+                TargetQuantity = 200,
+                CompletedQuantity = 150,
+                ScrapQuantity = 5,
+                Status = "InProduction",
+                LineCode = "LINE-MOLDING-02",
+                PlannedStartDate = DateTime.Today.AddDays(-1),
+                PlannedEndDate = DateTime.Today.AddDays(1)
+            });
+
+            AddWorkOrder(new WorkOrderRecord
+            {
+                WorkOrderNo = "WO-2026-MDS02",
+                RelatedOrderId = "MLG26-1562",
+                ProductCode = "MDS-PRINTER-M2",
+                ProductName = "Bộ module đầu in công nghiệp MDS-M2",
+                TargetQuantity = 50,
+                CompletedQuantity = 40,
+                ScrapQuantity = 1,
+                Status = "InProduction",
+                LineCode = "LINE-ASSEMBLY-01",
+                PlannedStartDate = DateTime.Today.AddDays(-3),
+                PlannedEndDate = DateTime.Today.AddDays(2)
+            });
+
+            AddWorkOrder(new WorkOrderRecord
+            {
+                WorkOrderNo = "WO-2026-MDS03",
+                RelatedOrderId = "SO-2026-MDS01",
+                ProductCode = "NVL-HDPE-600",
+                ProductName = "Hạt nhựa HDPE ép đùn màng",
+                TargetQuantity = 2500,
+                CompletedQuantity = 1800,
+                ScrapQuantity = 20,
+                Status = "InProduction",
+                LineCode = "LINE-EXTRUSION-04",
+                PlannedStartDate = DateTime.Today.AddDays(-2),
+                PlannedEndDate = DateTime.Today.AddDays(1)
+            });
+
+            // 5. Seed tbPUR_PurchaseOrder (Đơn mua hàng)
+            PurchaseOrders.Clear();
+            AddPurchaseOrder(new PurchaseOrderRecord
+            {
+                PoNumber = "PO-2026-PP01",
+                SupplierCode = "NCC-SABIC",
+                SupplierName = "SABIC Petrochemical Asia",
+                MaterialCode = "NVL-PP-500",
+                MaterialName = "Hạt nhựa Polypropylene nguyên sinh",
+                OrderQuantity = 5000,
+                ReceivedQuantity = 5000,
+                Status = "Received",
+                OrderDate = DateTime.Today.AddDays(-10),
+                EtaDate = DateTime.Today.AddDays(-2)
+            });
+
+            AddPurchaseOrder(new PurchaseOrderRecord
+            {
+                PoNumber = "PO-2026-CTD02",
+                SupplierCode = "NCC-LG",
+                SupplierName = "LG Chem Vietnam",
+                MaterialCode = "NVL-ESD-100",
+                MaterialName = "Phụ gia chống tĩnh điện Carbon Nanotube",
+                OrderQuantity = 200,
+                ReceivedQuantity = 0,
+                Status = "Shipping",
+                OrderDate = DateTime.Today.AddDays(-4),
+                EtaDate = DateTime.Today.AddDays(1)
+            });
+
+            AddPurchaseOrder(new PurchaseOrderRecord
+            {
+                PoNumber = "PO-2026-HDPE03",
+                SupplierCode = "NCC-SCG",
+                SupplierName = "SCG Chemicals Thailand",
+                MaterialCode = "NVL-HDPE-600",
+                MaterialName = "Hạt nhựa HDPE ép đùn màng",
+                OrderQuantity = 3000,
+                ReceivedQuantity = 1000,
+                Status = "Shipping",
+                OrderDate = DateTime.Today.AddDays(-5),
+                EtaDate = DateTime.Today.AddDays(2)
+            });
+
+            // 6. Seed tbINV_MaterialLot (Vị trí kệ, Pallet, FEFO)
+            MaterialLots.Clear();
+            AddMaterialLot(new MaterialLotDetailRecord
+            {
+                LotNumber = "LOT-2026-PP43",
+                MaterialCode = "NVL-PP-500",
+                MaterialName = "Hạt nhựa Polypropylene nguyên sinh",
+                WarehouseCode = "KNVLSX",
+                LocationCode = "KHO-A-K01-PALLET05",
+                Quantity = 4014.0,
+                Unit = "kg",
+                MfgDate = DateTime.Today.AddDays(-45),
+                ExpDate = DateTime.Today.AddDays(320),
+                QCStatus = "Approved"
+            });
+
+            AddMaterialLot(new MaterialLotDetailRecord
+            {
+                LotNumber = "LOT-2025-PP09",
+                MaterialCode = "NVL-PP-500",
+                MaterialName = "Hạt nhựa Polypropylene nguyên sinh (Lô cận date)",
+                WarehouseCode = "KNVLSX",
+                LocationCode = "KHO-A-K01-PALLET01",
+                Quantity = 500.0,
+                Unit = "kg",
+                MfgDate = DateTime.Today.AddDays(-340),
+                ExpDate = DateTime.Today.AddDays(25),
+                QCStatus = "Approved"
+            });
+
+            AddMaterialLot(new MaterialLotDetailRecord
+            {
+                LotNumber = "LOT-2026-ESD01",
+                MaterialCode = "NVL-ESD-100",
+                MaterialName = "Phụ gia chống tĩnh điện Carbon Nanotube",
+                WarehouseCode = "KNVLSX",
+                LocationCode = "KHO-A-K02-PALLET12",
+                Quantity = 85.0,
+                Unit = "kg",
+                MfgDate = DateTime.Today.AddDays(-60),
+                ExpDate = DateTime.Today.AddDays(120),
+                QCStatus = "Approved"
+            });
+
+            AddMaterialLot(new MaterialLotDetailRecord
+            {
+                LotNumber = "LOT-2026-HDPE12",
+                MaterialCode = "NVL-HDPE-600",
+                MaterialName = "Hạt nhựa HDPE ép đùn màng",
+                WarehouseCode = "KBTP",
+                LocationCode = "KHO-B-K03-PALLET08",
+                Quantity = 1580.0,
+                Unit = "kg",
+                MfgDate = DateTime.Today.AddDays(-15),
+                ExpDate = DateTime.Today.AddDays(350),
+                QCStatus = "Approved"
+            });
+
+            AddMaterialLot(new MaterialLotDetailRecord
+            {
+                LotNumber = "LOT-2026-WAR01",
+                MaterialCode = "NVL-HDPE-600",
+                MaterialName = "Hạt nhựa HDPE (Đang cách ly kiểm định)",
+                WarehouseCode = "KBTP",
+                LocationCode = "KHO-B-QC-HOLD",
+                Quantity = 400.0,
+                Unit = "kg",
+                MfgDate = DateTime.Today.AddDays(-5),
+                ExpDate = DateTime.Today.AddDays(360),
+                QCStatus = "Quarantine"
+            });
         }
 
         private static void AddLot(LotBalanceRecord r) => LotBalances[r.LotNumber] = r;
         private static void AddStockIn(StockInRecord r) => StockInTickets[r.TicketCode] = r;
         private static void AddSalesOrder(SalesOrderRecord r) => SalesOrders[r.OrderId] = r;
+        public static void AddWorkOrder(WorkOrderRecord r) => WorkOrders[r.WorkOrderNo] = r;
+        public static void AddPurchaseOrder(PurchaseOrderRecord r) => PurchaseOrders[r.PoNumber] = r;
+        public static void AddMaterialLot(MaterialLotDetailRecord r) => MaterialLots[r.LotNumber] = r;
 
         public static void RegisterAll(AgentToolRegistry registry)
         {
@@ -365,6 +579,25 @@ namespace ZeroAgent.Tools.Erp
                     .AddProperty("order_id", SchemaPropertyType.String, required: true)
                     .AddProperty("new_status", SchemaPropertyType.String, required: true)
                     .AddProperty("reason", SchemaPropertyType.String, required: false)));
+
+            // Tool 8: Kế hoạch đáp ứng đơn hàng bán toàn diện (Cross-Department: Sales <-> ATP <-> WorkOrder <-> PurchaseOrder)
+            registry.Register(new AgentTool(
+                "mds_db_so_fulfillment_plan",
+                "Lập và tra cứu kế hoạch đáp ứng toàn diện cho đơn hàng bán MDS (kết hợp liên phòng ban: Bán hàng SO <-> Tồn kho ATP <-> Lệnh sản xuất WO <-> Mua hàng PO). Tự động kiểm tra tiến độ sản xuất và ngày giao hàng của nhà cung cấp nếu thiếu tồn kho.",
+                "order_id: string",
+                ExecuteSoFulfillmentPlanAsync,
+                schema: new JsonSchemaConstraint("mds_db_so_fulfillment_plan")
+                    .AddProperty("order_id", SchemaPropertyType.String, required: true)));
+
+            // Tool 9: Truy vết vị trí lô và hạn sử dụng vật tư kho MDS (FEFO)
+            registry.Register(new AgentTool(
+                "mds_db_inv_lot_tracking",
+                "Truy vết vị trí lô và hạn sử dụng vật tư/sản phẩm trong kho MDS (tbINV_MaterialLot). Trả về vị trí kệ, pallet, hạn sử dụng, trạng thái kiểm định QC, và tư vấn thứ tự xuất kho ưu tiên theo nguyên tắc FEFO (hạn ngắn xuất trước).",
+                "material_or_lot: string, warehouse_code?: string",
+                ExecuteInvLotTrackingAsync,
+                schema: new JsonSchemaConstraint("mds_db_inv_lot_tracking")
+                    .AddProperty("material_or_lot", SchemaPropertyType.String, required: true)
+                    .AddProperty("warehouse_code", SchemaPropertyType.String, required: false)));
         }
 
         private static Task<string> ExecuteLotBalanceQueryAsync(string argument)
@@ -1021,6 +1254,294 @@ namespace ZeroAgent.Tools.Erp
                 currentStatus = newStatus,
                 reason,
                 updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+            }, JsonOpts));
+        }
+
+        public static Task<string> ExecuteSoFulfillmentPlanAsync(string argument)
+        {
+            var p = ParseJsonArguments(argument);
+            string orderId = p.GetValueOrDefault("order_id", string.Empty);
+
+            if (string.IsNullOrWhiteSpace(orderId))
+            {
+                orderId = argument.Trim('\"', '{', '}', ' ');
+            }
+
+            if (string.IsNullOrWhiteSpace(orderId))
+            {
+                return Task.FromResult(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    error = "MISSING_ORDER_ID",
+                    message = "Vui lòng cung cấp mã đơn hàng bán cần kiểm tra (order_id)."
+                }, JsonOpts));
+            }
+
+            if (!SalesOrders.TryGetValue(orderId, out var order))
+            {
+                return Task.FromResult(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    error = "ORDER_NOT_FOUND",
+                    message = $"Không tìm thấy đơn hàng bán '{orderId}' trong hệ thống MDS."
+                }, JsonOpts));
+            }
+
+            var itemPlans = new List<object>();
+            bool allAvailable = true;
+            bool anyInProduction = false;
+            bool anyWaitingPO = false;
+
+            foreach (var item in order.Items)
+            {
+                double remainingNeed = item.RemainingQty;
+
+                // 1. Tồn kho khả dụng (ATP)
+                double availableStock = 0.0;
+                string matchedLot = item.LotTM;
+
+                var matchingLots = MaterialLots.Values
+                    .Where(l => l.MaterialCode.Equals(item.ProductCode, StringComparison.OrdinalIgnoreCase) ||
+                                (!string.IsNullOrEmpty(item.LotTM) && l.LotNumber.Equals(item.LotTM, StringComparison.OrdinalIgnoreCase)) ||
+                                l.MaterialName.IndexOf(item.ProductName, StringComparison.OrdinalIgnoreCase) >= 0)
+                    .Where(l => l.QCStatus.Equals("Approved", StringComparison.OrdinalIgnoreCase) && !l.IsExpired)
+                    .ToList();
+
+                if (matchingLots.Count > 0)
+                {
+                    availableStock = matchingLots.Sum(l => l.Quantity);
+                    matchedLot = matchingLots[0].LotNumber;
+                }
+                else if (LotBalances.TryGetValue(item.LotTM, out var lb))
+                {
+                    availableStock = lb.AvailableQty;
+                }
+
+                double shortfall = Math.Max(0, remainingNeed - availableStock);
+                if (shortfall > 0) allAvailable = false;
+
+                // 2. Lệnh sản xuất đang thực hiện (tbPROD_WorkOrder)
+                var activeWO = WorkOrders.Values.FirstOrDefault(w =>
+                    (w.RelatedOrderId.Equals(orderId, StringComparison.OrdinalIgnoreCase) ||
+                     w.ProductCode.Equals(item.ProductCode, StringComparison.OrdinalIgnoreCase)) &&
+                    !w.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase));
+
+                object? woInfo = null;
+                if (activeWO != null)
+                {
+                    anyInProduction = true;
+                    woInfo = new
+                    {
+                        workOrderNo = activeWO.WorkOrderNo,
+                        lineCode = activeWO.LineCode,
+                        targetQty = activeWO.TargetQuantity,
+                        completedQty = activeWO.CompletedQuantity,
+                        progressPercent = activeWO.ProgressPercent,
+                        status = activeWO.Status,
+                        plannedEndDate = activeWO.PlannedEndDate.ToString("yyyy-MM-dd")
+                    };
+                }
+
+                // 3. Đơn mua hàng vật tư (tbPUR_PurchaseOrder)
+                var activePO = PurchaseOrders.Values.FirstOrDefault(po =>
+                    (po.MaterialCode.Equals(item.ProductCode, StringComparison.OrdinalIgnoreCase) ||
+                     item.ProductName.IndexOf(po.MaterialName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                     po.MaterialName.IndexOf(item.ProductName, StringComparison.OrdinalIgnoreCase) >= 0) &&
+                    !po.Status.Equals("Received", StringComparison.OrdinalIgnoreCase));
+
+                object? poInfo = null;
+                if (activePO != null)
+                {
+                    anyWaitingPO = true;
+                    poInfo = new
+                    {
+                        poNumber = activePO.PoNumber,
+                        supplier = activePO.SupplierName,
+                        orderQty = activePO.OrderQuantity,
+                        status = activePO.Status,
+                        etaDate = activePO.EtaDate.ToString("yyyy-MM-dd")
+                    };
+                }
+
+                string itemStatus;
+                string itemRecommendation;
+
+                if (shortfall <= 0)
+                {
+                    itemStatus = "ĐỦ HÀNG GIAO NGAY";
+                    itemRecommendation = $"Tồn kho khả dụng ({availableStock} {item.Unit}) vượt nhu cầu ({remainingNeed} {item.Unit}). Sẵn sàng xuất kho.";
+                }
+                else if (activeWO != null)
+                {
+                    itemStatus = "ĐANG CHỜ SẢN XUẤT";
+                    itemRecommendation = $"Thiếu {shortfall} {item.Unit}. Đang chạy trên chuyền {activeWO.LineCode} theo lệnh {activeWO.WorkOrderNo} (tiến độ {activeWO.ProgressPercent}%, dự kiến xong {activeWO.PlannedEndDate:dd/MM/yyyy}).";
+                }
+                else if (activePO != null)
+                {
+                    itemStatus = "ĐANG CHỜ NHÀ CUNG CẤP";
+                    itemRecommendation = $"Thiếu {shortfall} {item.Unit}. Đang chờ nguyên vật liệu từ nhà cung cấp {activePO.SupplierName} theo đơn mua {activePO.PoNumber} (ETA: {activePO.EtaDate:dd/MM/yyyy}).";
+                }
+                else
+                {
+                    itemStatus = "CẦN LẬP LỆNH SẢN XUẤT";
+                    itemRecommendation = $"Thiếu {shortfall} {item.Unit} và chưa có lệnh sản xuất. Cần chuyển thông tin sang phòng Kế hoạch (PMC) để lập LSX bổ sung.";
+                }
+
+                itemPlans.Add(new
+                {
+                    productCode = item.ProductCode,
+                    productName = item.ProductName,
+                    unit = item.Unit,
+                    orderQty = item.Quantity,
+                    deliveredQty = item.DeliveredQty,
+                    remainingNeed,
+                    availableInStock = availableStock,
+                    shortfall,
+                    itemStatus,
+                    itemRecommendation,
+                    workOrder = woInfo,
+                    purchaseOrder = poInfo
+                });
+            }
+
+            string overallStrategy;
+            string overallState;
+
+            if (allAvailable)
+            {
+                overallState = "CAN_FULFILL_IMMEDIATELY";
+                overallStrategy = $"Đơn hàng {orderId} có đủ 100% hàng khả dụng trong kho. Nhân viên bán hàng có thể lập Phiếu xuất kho giao hàng ngay (Delivery Note).";
+            }
+            else if (anyInProduction)
+            {
+                overallState = "FULFILL_WITH_PRODUCTION";
+                overallStrategy = $"Đơn hàng {orderId} đã giao một phần, phần còn lại đang trong dây chuyền sản xuất của xưởng MDS. Dự kiến hoàn thành đúng hạn hẹn giao. Đề xuất: xuất kho trước các mặt hàng đã có sẵn.";
+            }
+            else if (anyWaitingPO)
+            {
+                overallState = "WAITING_SUPPLIER_PO";
+                overallStrategy = $"Đơn hàng {orderId} phụ thuộc vào lô NVL đang trên đường về từ nhà cung cấp. Bộ phận Thu mua cần theo dõi chặt chẽ ETA nhập kho.";
+            }
+            else
+            {
+                overallState = "NEED_PLANNING_ACTION";
+                overallStrategy = $"Đơn hàng {orderId} thiếu hàng và chưa có lệnh sản xuất chạy. Cần bộ phận PMC họp giao ban đưa vào lịch sản xuất tuần này.";
+            }
+
+            return Task.FromResult(JsonSerializer.Serialize(new
+            {
+                success = true,
+                orderId,
+                customer = order.CustomerName,
+                orderStatus = order.Status,
+                promiseDate = order.PromiseDate?.ToString("yyyy-MM-dd") ?? "Chưa xác định",
+                deliveryProgressPercent = order.DeliveryProgressPercent,
+                overallState,
+                overallStrategy,
+                itemsCount = itemPlans.Count,
+                items = itemPlans
+            }, JsonOpts));
+        }
+
+        public static Task<string> ExecuteInvLotTrackingAsync(string argument)
+        {
+            var p = ParseJsonArguments(argument);
+            string query = p.GetValueOrDefault("material_or_lot", string.Empty);
+            string wh = p.GetValueOrDefault("warehouse_code", string.Empty);
+
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                query = argument.Trim('\"', '{', '}', ' ');
+            }
+
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return Task.FromResult(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    error = "MISSING_QUERY",
+                    message = "Vui lòng cung cấp mã vật tư hoặc mã lô (material_or_lot) để truy vết vị trí kho."
+                }, JsonOpts));
+            }
+
+            var matching = MaterialLots.Values
+                .Where(l => l.LotNumber.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            l.MaterialCode.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            l.MaterialName.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
+                .Where(l => string.IsNullOrWhiteSpace(wh) || l.WarehouseCode.Equals(wh, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(l => l.ExpDate) // FEFO order
+                .ToList();
+
+            if (matching.Count == 0)
+            {
+                return Task.FromResult(JsonSerializer.Serialize(new
+                {
+                    success = true,
+                    query,
+                    warehouseFilter = wh,
+                    found = 0,
+                    message = $"Không tìm thấy lô vật tư nào khớp với từ khóa '{query}' trong kho MDS."
+                }, JsonOpts));
+            }
+
+            var lotList = new List<object>();
+            int rank = 1;
+
+            foreach (var lot in matching)
+            {
+                int daysLeft = (int)Math.Round((lot.ExpDate - DateTime.Today).TotalDays);
+                string fefoAdvice;
+                string statusTag;
+
+                if (lot.IsExpired)
+                {
+                    statusTag = "HẾT HẠN SỬ DỤNG";
+                    fefoAdvice = "CẤM XUẤT: Lô hàng đã hết hạn sử dụng. Cần làm phiếu hủy hoặc tái chế.";
+                }
+                else if (lot.QCStatus.Equals("Quarantine", StringComparison.OrdinalIgnoreCase))
+                {
+                    statusTag = "ĐANG CÁCH LY KIỂM ĐỊNH";
+                    fefoAdvice = "TẠM GIỮ: Đang chờ QC cấp tem PASS. Không được phép bốc xếp xuất xưởng.";
+                }
+                else if (daysLeft <= 30)
+                {
+                    statusTag = "CẬN DATE (<30 NGÀY)";
+                    fefoAdvice = $"ƯU TIÊN SỐ {rank}: Hạn dùng chỉ còn {daysLeft} ngày. Khuyến nghị xuất kho ngay theo nguyên tắc FEFO!";
+                }
+                else
+                {
+                    statusTag = "TIÊU CHUẨN";
+                    fefoAdvice = $"ƯU TIÊN SỐ {rank}: Hàng đạt chuẩn chất lượng, còn {daysLeft} ngày sử dụng.";
+                }
+
+                lotList.Add(new
+                {
+                    fefoPriority = rank++,
+                    lotNumber = lot.LotNumber,
+                    materialCode = lot.MaterialCode,
+                    materialName = lot.MaterialName,
+                    warehouseCode = lot.WarehouseCode,
+                    palletLocation = lot.LocationCode,
+                    quantity = lot.Quantity,
+                    unit = lot.Unit,
+                    mfgDate = lot.MfgDate.ToString("yyyy-MM-dd"),
+                    expDate = lot.ExpDate.ToString("yyyy-MM-dd"),
+                    daysUntilExpiry = daysLeft,
+                    qcStatus = lot.QCStatus,
+                    statusTag,
+                    fefoAdvice
+                });
+            }
+
+            return Task.FromResult(JsonSerializer.Serialize(new
+            {
+                success = true,
+                query,
+                warehouseFilter = string.IsNullOrWhiteSpace(wh) ? "Tất cả kho" : wh,
+                totalLotsFound = lotList.Count,
+                totalAvailableQty = matching.Where(l => l.QCStatus == "Approved" && !l.IsExpired).Sum(l => l.Quantity),
+                fefoRule = "First-Expired, First-Out (Lô có ngày hết hạn sớm nhất được xếp thứ tự ưu tiên xuất trước)",
+                lots = lotList
             }, JsonOpts));
         }
 

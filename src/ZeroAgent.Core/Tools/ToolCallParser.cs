@@ -188,7 +188,7 @@ namespace ZeroAgent.Core.Tools
             string text = raw.Trim();
 
             // Replace single quotes with double quotes if no double quotes present
-            if (text.Contains('\'') && !text.Contains('"'))
+            if (text.Contains("'") && !text.Contains("\""))
             {
                 text = text.Replace('\'', '"');
             }
