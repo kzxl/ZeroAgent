@@ -58,6 +58,7 @@ namespace ZeroAgent.Tools.Erp
 
         private static readonly ConcurrentDictionary<string, LotBalanceRecord> LotBalances = new ConcurrentDictionary<string, LotBalanceRecord>(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, StockInRecord> StockInTickets = new ConcurrentDictionary<string, StockInRecord>(StringComparer.OrdinalIgnoreCase);
+        public const string DefaultTestConnectionString = "Server=192.168.19.70,1433;Database=MDSManagement;User Id=testing;Password=268479#Kzx;TrustServerCertificate=True;Connect Timeout=5;";
         private static Func<IDbConnection>? _liveDbFactory;
 
         static MdsDatabaseToolkit()
@@ -68,6 +69,31 @@ namespace ZeroAgent.Tools.Erp
         public static void SetLiveDbFactory(Func<IDbConnection> factory)
         {
             _liveDbFactory = factory;
+        }
+
+        public static void ConfigureLiveDatabase(string connectionString)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString)) throw new ArgumentNullException(nameof(connectionString));
+            _liveDbFactory = () => CreateDbConnection(connectionString);
+        }
+
+        public static void ConnectToDefaultTestDatabase()
+        {
+            ConfigureLiveDatabase(DefaultTestConnectionString);
+        }
+
+        private static IDbConnection CreateDbConnection(string connectionString)
+        {
+            var type = Type.GetType("Microsoft.Data.SqlClient.SqlConnection, Microsoft.Data.SqlClient")
+                       ?? Type.GetType("System.Data.SqlClient.SqlConnection, System.Data.SqlClient")
+                       ?? Type.GetType("System.Data.SqlClient.SqlConnection, System.Data");
+
+            if (type == null)
+            {
+                throw new InvalidOperationException("Could not find a valid SQL Server client provider (Microsoft.Data.SqlClient or System.Data.SqlClient).");
+            }
+
+            return (IDbConnection)Activator.CreateInstance(type, connectionString)!;
         }
 
         public static void SeedMdsDatabase()
@@ -210,6 +236,63 @@ namespace ZeroAgent.Tools.Erp
                 lotNo = argument.Trim('\"', '{', '}', ' ');
             }
 
+            // 1. Attempt Live SQL Server query if configured
+            if (_liveDbFactory != null && !string.IsNullOrWhiteSpace(lotNo))
+            {
+                try
+                {
+                    using var conn = _liveDbFactory();
+                    conn.Open();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        SELECT TOP 1 l.LotNo, CAST(l.Quantity AS float) AS Quantity, CAST(l.RemainingQty AS float) AS RemainingQty,
+                                     l.Status, l.PONumber, w.Code AS WarehouseCode, w.Name AS WarehouseName, l.StockInDate
+                        FROM tbINV_MaterialLot l
+                        LEFT JOIN tbCAT_Warehouse w ON l.idWarehouse = w.id
+                        WHERE l.LotNo = @LotNo";
+                    var pLot = cmd.CreateParameter();
+                    pLot.ParameterName = "@LotNo";
+                    pLot.Value = lotNo;
+                    cmd.Parameters.Add(pLot);
+
+                    using var reader = cmd.ExecuteReader();
+                    if (reader.Read())
+                    {
+                        string liveLotNo = reader["LotNo"]?.ToString() ?? lotNo;
+                        double remaining = reader["RemainingQty"] != DBNull.Value ? Convert.ToDouble(reader["RemainingQty"]) : 0.0;
+                        double onHand = reader["Quantity"] != DBNull.Value ? Convert.ToDouble(reader["Quantity"]) : 0.0;
+                        string status = reader["Status"]?.ToString() ?? "Active";
+                        string po = reader["PONumber"]?.ToString() ?? "";
+                        string whCode = reader["WarehouseCode"]?.ToString() ?? "";
+                        string whName = reader["WarehouseName"]?.ToString() ?? "";
+
+                        string json = JsonSerializer.Serialize(new
+                        {
+                            database = "MDSManagement (192.168.19.70)",
+                            table = "tbINV_MaterialLot",
+                            source = "LIVE_SQL_SERVER",
+                            lotNumber = liveLotNo,
+                            warehouseCode = whCode,
+                            warehouseName = whName,
+                            poNumber = po,
+                            onHandQty = onHand,
+                            allocatedQty = Math.Max(0, onHand - remaining),
+                            availableQty = remaining,
+                            unit = "kg",
+                            status = status,
+                            canIssue = remaining > 0 && status.Equals("Active", StringComparison.OrdinalIgnoreCase)
+                        }, JsonOpts);
+
+                        return Task.FromResult(json);
+                    }
+                }
+                catch
+                {
+                    // Fall back to in-memory seed records
+                }
+            }
+
+            // 2. In-Memory Seed Fallback
             if (LotBalances.TryGetValue(lotNo, out var lot))
             {
                 if (!string.IsNullOrWhiteSpace(wh) && !lot.WarehouseCode.Equals(wh, StringComparison.OrdinalIgnoreCase))
@@ -250,6 +333,67 @@ namespace ZeroAgent.Tools.Erp
                 ticketCode = argument.Trim('\"', '{', '}', ' ');
             }
 
+            // 1. Attempt Live SQL Server query if configured
+            if (_liveDbFactory != null && (!string.IsNullOrWhiteSpace(ticketCode) || !string.IsNullOrWhiteSpace(poNumber)))
+            {
+                try
+                {
+                    using var conn = _liveDbFactory();
+                    conn.Open();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        SELECT TOP 1 h.Code, h.InType, h.WarehouseCode, h.Status, h.TransDate,
+                                     d.PONumber, CAST(d.Quantity AS float) AS Quantity, d.LotNo
+                        FROM tbINV_Material_StockIn h
+                        LEFT JOIN tbINV_Material_StockIn_Detail d ON h.id = d.idStockIn
+                        WHERE h.IsDeleted = 0 AND (@TicketCode <> '' AND h.Code = @TicketCode OR @PoNumber <> '' AND d.PONumber = @PoNumber)";
+                    var pCode = cmd.CreateParameter();
+                    pCode.ParameterName = "@TicketCode";
+                    pCode.Value = ticketCode ?? string.Empty;
+                    cmd.Parameters.Add(pCode);
+
+                    var pPo = cmd.CreateParameter();
+                    pPo.ParameterName = "@PoNumber";
+                    pPo.Value = poNumber ?? string.Empty;
+                    cmd.Parameters.Add(pPo);
+
+                    using var reader = cmd.ExecuteReader();
+                    if (reader.Read())
+                    {
+                        string liveCode = reader["Code"]?.ToString() ?? ticketCode;
+                        string inType = reader["InType"]?.ToString() ?? "In";
+                        string whCode = reader["WarehouseCode"]?.ToString() ?? "";
+                        string status = reader["Status"]?.ToString() ?? "";
+                        string po = reader["PONumber"]?.ToString() ?? "";
+                        double qty = reader["Quantity"] != DBNull.Value ? Convert.ToDouble(reader["Quantity"]) : 0.0;
+                        string lotNo = reader["LotNo"]?.ToString() ?? "";
+                        DateTime transDate = reader["TransDate"] != DBNull.Value ? Convert.ToDateTime(reader["TransDate"]) : DateTime.Today;
+
+                        string json = JsonSerializer.Serialize(new
+                        {
+                            database = "MDSManagement (192.168.19.70)",
+                            table = "tbINV_Material_StockIn",
+                            source = "LIVE_SQL_SERVER",
+                            ticketCode = liveCode,
+                            inType = inType,
+                            warehouseCode = whCode,
+                            poNumber = po,
+                            totalQuantity = qty,
+                            lotNo = lotNo,
+                            status = status,
+                            transDate = transDate.ToString("yyyy-MM-dd")
+                        }, JsonOpts);
+
+                        return Task.FromResult(json);
+                    }
+                }
+                catch
+                {
+                    // Fall back to in-memory seed records
+                }
+            }
+
+            // 2. In-Memory Seed Fallback
             StockInRecord? ticket = null;
             if (!string.IsNullOrWhiteSpace(ticketCode) && StockInTickets.TryGetValue(ticketCode, out var byCode))
             {
@@ -295,6 +439,62 @@ namespace ZeroAgent.Tools.Erp
                 threshold = dVal;
             }
 
+            // 1. Attempt Live SQL Server query if configured
+            if (_liveDbFactory != null)
+            {
+                try
+                {
+                    using var conn = _liveDbFactory();
+                    conn.Open();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        SELECT TOP 20 l.LotNo, CAST(l.Quantity AS float) AS Quantity, CAST(l.RemainingQty AS float) AS RemainingQty,
+                                     l.Status, l.PONumber, w.Code AS WarehouseCode, w.Name AS WarehouseName
+                        FROM tbINV_MaterialLot l
+                        LEFT JOIN tbCAT_Warehouse w ON l.idWarehouse = w.id
+                        WHERE l.Status = 'Active' AND l.RemainingQty < @Threshold
+                        ORDER BY l.RemainingQty ASC";
+                    var pTh = cmd.CreateParameter();
+                    pTh.ParameterName = "@Threshold";
+                    pTh.Value = threshold;
+                    cmd.Parameters.Add(pTh);
+
+                    using var reader = cmd.ExecuteReader();
+                    var liveAlertLots = new List<object>();
+                    while (reader.Read())
+                    {
+                        double rem = reader["RemainingQty"] != DBNull.Value ? Convert.ToDouble(reader["RemainingQty"]) : 0.0;
+                        liveAlertLots.Add(new
+                        {
+                            lotNumber = reader["LotNo"]?.ToString(),
+                            warehouse = reader["WarehouseCode"]?.ToString(),
+                            warehouseName = reader["WarehouseName"]?.ToString(),
+                            availableQty = rem,
+                            deficitKg = Math.Max(0, threshold - rem),
+                            status = reader["Status"]?.ToString(),
+                            poNumber = reader["PONumber"]?.ToString()
+                        });
+                    }
+
+                    if (liveAlertLots.Count > 0)
+                    {
+                        return Task.FromResult(JsonSerializer.Serialize(new
+                        {
+                            database = "MDSManagement (192.168.19.70)",
+                            source = "LIVE_SQL_SERVER",
+                            alertThresholdKg = threshold,
+                            totalAlertLots = liveAlertLots.Count,
+                            alertLots = liveAlertLots
+                        }, JsonOpts));
+                    }
+                }
+                catch
+                {
+                    // Fall back
+                }
+            }
+
+            // 2. In-Memory Seed Fallback
             var query = LotBalances.Values.AsEnumerable();
             if (!string.IsNullOrWhiteSpace(wh))
             {

@@ -152,5 +152,36 @@ namespace ZeroAgent.Tests
             Assert.NotNull(output);
             Assert.NotEmpty(output);
         }
+
+        [Fact]
+        public async Task MdsDatabaseWorkflow_LiveTestDatabase_QueriesRealTablesOn192_168_19_70()
+        {
+            var registry = new AgentToolRegistry();
+            MdsDatabaseToolkit.RegisterAll(registry);
+
+            // Configure live connection to 192.168.19.70 (MDSManagement)
+            MdsDatabaseToolkit.ConnectToDefaultTestDatabase();
+
+            // 1. Query live lot: 14G24FIL002
+            bool hasLotTool = registry.TryGetTool("mds_db_lot_balance_query", out var lotTool);
+            Assert.True(hasLotTool);
+            string lotResult = await lotTool.ExecuteAsync("{\"lot_no\": \"14G24FIL002\"}");
+            Assert.NotNull(lotResult);
+            Assert.Contains("14G24FIL002", lotResult);
+
+            // 2. Query live stock in ticket: KNVLSX26-PNK-0868
+            bool hasStockInTool = registry.TryGetTool("mds_db_stock_in_query", out var stockInTool);
+            Assert.True(hasStockInTool);
+            string stockInResult = await stockInTool.ExecuteAsync("{\"ticket_code\": \"KNVLSX26-PNK-0868\"}");
+            Assert.NotNull(stockInResult);
+            Assert.Contains("KNVLSX26-PNK-0868", stockInResult);
+
+            // 3. Query low stock alert
+            bool hasAlertTool = registry.TryGetTool("mds_db_low_stock_alert", out var alertTool);
+            Assert.True(hasAlertTool);
+            string alertResult = await alertTool.ExecuteAsync("{\"threshold_kg\": 100}");
+            Assert.NotNull(alertResult);
+            Assert.Contains("alertLots", alertResult);
+        }
     }
 }
