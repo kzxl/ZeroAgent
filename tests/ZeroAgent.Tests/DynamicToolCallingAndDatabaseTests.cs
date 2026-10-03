@@ -165,124 +165,110 @@ namespace ZeroAgent.Tests
         [Fact]
         public void ToolCallParser_XmlTags_ParsesCorrectly()
         {
-            string output = "<thought>Kiểm tra số dư lô hàng</thought><tool_call>{\"name\": \"mds_db_lot_balance_query\", \"arguments\": {\"lot_number\": \"14G24FIL002\"}}</tool_call>";
+            string output = "<thought>Kiểm tra số dư lô hàng</thought><tool_call>{\"name\": \"erp_db_lot_balance_query\", \"arguments\": {\"lot_number\": \"LOT-2026-PP01\"}}</tool_call>";
             bool ok = ToolCallParser.TryParseToolCall(output, out var req);
 
             Assert.True(ok);
-            Assert.Equal("mds_db_lot_balance_query", req.ToolName);
-            Assert.Contains("14G24FIL002", req.ArgumentsJson);
+            Assert.Equal("erp_db_lot_balance_query", req.ToolName);
+            Assert.Contains("LOT-2026-PP01", req.ArgumentsJson);
         }
 
         [Fact]
         public void ToolCallParser_SafeRepairJson_RepairsMalformedAndTruncatedJson()
         {
             // Truncated JSON without closing braces
-            string truncated = "<tool_call>{\"name\": \"mds_db_lot_balance_query\", \"arguments\": {\"lot_number\": \"14G24FIL002\"";
+            string truncated = "<tool_call>{\"name\": \"erp_db_lot_balance_query\", \"arguments\": {\"lot_number\": \"LOT-2026-PP01\"";
             bool ok = ToolCallParser.TryParseToolCall(truncated, out var req);
 
             Assert.True(ok);
-            Assert.Equal("mds_db_lot_balance_query", req.ToolName);
-            Assert.Contains("14G24FIL002", req.ArgumentsJson);
+            Assert.Equal("erp_db_lot_balance_query", req.ToolName);
+            Assert.Contains("LOT-2026-PP01", req.ArgumentsJson);
 
             // Single quotes and trailing comma
-            string malformed = "{'name': 'mds_db_low_stock_alert', 'arguments': {'threshold_kg': 50,}}";
+            string malformed = "{'name': 'erp_db_low_stock_alert', 'arguments': {'threshold_kg': 50,}}";
             bool ok2 = ToolCallParser.TryParseJsonPayload(malformed, out var req2);
 
             Assert.True(ok2);
-            Assert.Equal("mds_db_low_stock_alert", req2.ToolName);
+            Assert.Equal("erp_db_low_stock_alert", req2.ToolName);
             Assert.Contains("50", req2.ArgumentsJson);
         }
 
         [Fact]
-        public async Task MdsDatabaseToolkit_SalesOrder_Query_ReturnsValidOrderAndItems()
+        public async Task EnterpriseErpToolkit_SalesOrder_Query_ReturnsValidOrderAndItems()
         {
             var registry = new AgentToolRegistry();
-            MdsDatabaseToolkit.RegisterAll(registry);
+            registry.RegisterErpToolkit();
 
-            var res = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_query", "{\"order_id\": \"sal26-Test\"}"));
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("erp_sales_order_query", "{\"order_code\": \"SO-2026-0881\", \"agency\": \"HQ\"}"));
             Assert.True(res.Success);
-            Assert.Contains("sal26-Test", res.Content);
-            Assert.Contains("KH-MDS-TEST", res.Content);
-            Assert.Contains("SP-KHAY-01", res.Content);
-            Assert.Contains("Draft", res.Content);
+            Assert.Contains("SO-2026-0881", res.Content);
+            Assert.Contains("Global Packaging Solutions Ltd.", res.Content);
+            Assert.Contains("Approved", res.Content);
         }
 
         [Fact]
-        public async Task MdsDatabaseToolkit_SalesOrder_DeliveryStatus_CalculatesAccuratePercentages()
+        public async Task EnterpriseErpToolkit_LotBalance_Query_ReturnsAccurateQuantities()
         {
             var registry = new AgentToolRegistry();
-            MdsDatabaseToolkit.RegisterAll(registry);
+            registry.RegisterErpToolkit();
 
-            // MLG26-1562 has 50 + 100 ordered, 30 + 50 delivered = 80 / 150 = 53.3%
-            var res = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_delivery_status", "{\"order_id\": \"MLG26-1562\"}"));
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("erp_inventory_lot_balance_query", "{\"lot_no\": \"LOT-2026-PP01\", \"warehouse_code\": \"WH-MAT-01\"}"));
             Assert.True(res.Success);
-            Assert.Contains("MLG26-1562", res.Content);
-            Assert.Contains("53.3", res.Content);
-            Assert.Contains("Đang giao hàng từng phần", res.Content);
+            Assert.Contains("LOT-2026-PP01", res.Content);
+            Assert.Contains("3300", res.Content);
+            Assert.Contains("Manufacturing Raw Material Warehouse", res.Content);
         }
 
         [Fact]
-        public async Task MdsDatabaseToolkit_SalesOrder_InventoryCheck_EvaluatesAtpStatus()
+        public async Task EnterpriseErpToolkit_ProductionPlan_Query_TracksWorkOrderProgress()
         {
             var registry = new AgentToolRegistry();
-            MdsDatabaseToolkit.RegisterAll(registry);
+            registry.RegisterErpToolkit();
 
-            // SO-2026-MDS01 requires 1000kg PP (rem) and 2500kg HDPE (rem).
-            // Stock has 4014kg PP available and 10000kg HDPE available -> All fulfillable!
-            var res = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_inventory_check", "{\"order_id\": \"SO-2026-MDS01\"}"));
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("erp_production_plan_query", "{\"process_stage\": \"Extrusion\", \"line_code\": \"EXT-01\"}"));
             Assert.True(res.Success);
-            Assert.Contains("SO-2026-MDS01", res.Content);
-            Assert.Contains("KHẢ DỤNG - ĐỦ HÀNG GIAO NGAY", res.Content);
+            Assert.Contains("Extrusion", res.Content);
+            Assert.Contains("WO-2026-0412", res.Content);
+            Assert.Contains("80", res.Content);
         }
 
         [Fact]
-        public async Task MdsDatabaseToolkit_SalesOrder_Cancel_RejectsIfDeliveryInProgress_AndAllowsIfClean()
+        public async Task EnterpriseErpToolkit_SalesPacking_Audit_ValidatesApprovalTrail()
         {
             var registry = new AgentToolRegistry();
-            MdsDatabaseToolkit.RegisterAll(registry);
+            registry.RegisterErpToolkit();
 
-            // 1. Rejects cancellation for MLG26-1562 because deliveredQty > 0
-            var resReject = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_cancel_or_update", "{\"order_id\": \"MLG26-1562\", \"new_status\": \"Cancelled\"}"));
-            Assert.True(resReject.Success);
-            Assert.Contains("VIOLATION_DELIVERY_IN_PROGRESS", resReject.Content);
-            Assert.Contains("Không thể hủy đơn hàng", resReject.Content);
-
-            // 2. Allows cancellation for sal26-Test (deliveredQty == 0)
-            var resAllow = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_cancel_or_update", "{\"order_id\": \"sal26-Test\", \"new_status\": \"Cancelled\"}"));
-            Assert.True(resAllow.Success);
-            Assert.Contains("\"success\":true", resAllow.Content);
-            Assert.Contains("Cancelled", resAllow.Content);
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("erp_sales_packing_audit", "{\"packing_id\": \"PACK-2026-0312\", \"order_code\": \"SO-2026-0881\"}"));
+            Assert.True(res.Success);
+            Assert.Contains("PACK-2026-0312", res.Content);
+            Assert.Contains("team_leader_approved", res.Content);
+            Assert.Contains("qa_staff_approved", res.Content);
         }
 
         [Fact]
-        public async Task MdsDatabaseToolkit_SalesOrder_FulfillmentPlan_IntegratesProductionWorkOrderAndPurchaseOrder()
+        public async Task EnterpriseErpToolkit_RdBom_Query_RetrievesFormulationAndMaterials()
         {
             var registry = new AgentToolRegistry();
-            MdsDatabaseToolkit.RegisterAll(registry);
+            registry.RegisterErpToolkit();
 
-            // sal26-Test needs 200 SP-KHAY-01. WorkOrder WO-2026-MDS01 is producing it on LINE-MOLDING-02!
-            var res = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_fulfillment_plan", "{\"order_id\": \"sal26-Test\"}"));
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("erp_rd_bom_query", "{\"product_code\": \"PP-LID-120\", \"status\": \"Release\"}"));
             Assert.True(res.Success);
-            Assert.Contains("sal26-Test", res.Content);
-            Assert.Contains("WO-2026-MDS01", res.Content);
-            Assert.Contains("LINE-MOLDING-02", res.Content);
-            Assert.Contains("FULFILL_WITH_PRODUCTION", res.Content);
+            Assert.Contains("PP-LID-120", res.Content);
+            Assert.Contains("BOM-PPLID-v2.1", res.Content);
+            Assert.Contains("MAT-PP-500", res.Content);
         }
 
         [Fact]
-        public async Task MdsDatabaseToolkit_InventoryLotTracking_RanksLotsByFEFO_AndWarnsNearExpiry()
+        public async Task EnterpriseErpToolkit_StockTransfer_DispatchesTicket()
         {
             var registry = new AgentToolRegistry();
-            MdsDatabaseToolkit.RegisterAll(registry);
+            registry.ApprovalHandler = (tool, arg) => Task.FromResult(true);
+            registry.RegisterErpToolkit();
 
-            // Query NVL-PP-500. LOT-2025-PP09 expires in 25 days, LOT-2026-PP43 in 320 days.
-            // FEFO priority 1 must be LOT-2025-PP09!
-            var res = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_inv_lot_tracking", "{\"material_or_lot\": \"NVL-PP-500\"}"));
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("erp_inventory_stock_transfer", "{\"from_warehouse\": \"WH-MAT-01\", \"to_warehouse\": \"WH-MAT-02\", \"item_code\": \"MAT-PP-500\", \"quantity\": 500}"));
             Assert.True(res.Success);
-            Assert.Contains("LOT-2025-PP09", res.Content);
-            Assert.Contains("LOT-2026-PP43", res.Content);
-            Assert.Contains("First-Expired, First-Out", res.Content);
-            Assert.Contains("CẬN DATE", res.Content);
+            Assert.Contains("PX-TRF-2026", res.Content);
+            Assert.Contains("PendingDispatch", res.Content);
         }
     }
 }

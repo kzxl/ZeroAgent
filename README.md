@@ -1,10 +1,10 @@
 # 🤖 ZeroAgent: Sovereign Pure C# Cognitive Agent & Multi-Agent Swarm Framework
 
-[![Version: 1.4.0](https://img.shields.io/badge/Version-1.4.0-blue.svg)](https://github.com/kzxl/ZeroAgent)
+[![Version: 1.4.1](https://img.shields.io/badge/Version-1.4.1-blue.svg)](https://github.com/kzxl/ZeroAgent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![.NET Multi-Targeting](https://img.shields.io/badge/.NET-8.0%20%7C%204.6.2%20%7C%20Standard%202.0-purple.svg)](https://dotnet.microsoft.com/)
 [![Zero External Dependencies](https://img.shields.io/badge/Dependencies-0%20(Pure%20C%23)-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-263%2F263%20Passed%20(100%25)-success.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-261%2F261%20Passed%20(100%25)-success.svg)]()
 [![Reflex Latency](https://img.shields.io/badge/Reflex%20Latency-<0.1ms%20(INT8)-orange.svg)]()
 [![Point Lookup](https://img.shields.io/badge/Point%20Lookup-<3µs%20(Billion--Scale)-brightgreen.svg)]()
 
@@ -350,19 +350,20 @@ The framework is partitioned into modular, single-responsibility components and 
   - `TsdbQueryTool.Anomalies.cs`: Statistical Z-score outlier and anomaly detection.
   - `TsdbDataPoint.cs`: Dedicated time-series data model.
   - `DialogueStateTracker.Entities.cs`: Multi-slot extraction and FSM state transition engine.
-- **`MdsDatabaseToolkit` (Sovereign Vietnamese ERP Suite)**:
-  - `MdsDatabaseToolkit.cs`: Full-fledged enterprise toolkit connecting to real SQL Server database (`MDSManagement` @ `192.168.19.70`) with high-speed in-memory DataFrame fallback.
-  - **Sales Order (SO) Domain**:
-    - `mds_db_so_query`: Detailed line-item order tracking, currency exchange, and customer profiles.
-    - `mds_db_so_delivery_status`: Fulfillment percentage and pending delivery balance analysis.
-    - `mds_db_so_inventory_check`: Available-to-Promise (ATP) check against live warehouse stock.
-    - `mds_db_so_cancel_or_update`: Business-governed cancellation preventing accidental deletion of shipped orders.
-    - `mds_db_so_fulfillment_plan`: Cross-department alignment across Sales Orders, Work Orders, and Purchase Orders.
+- **`ErpEnterpriseToolkit` (Standardized Enterprise ERP Suite)**:
+  - `ErpEnterpriseToolkit.cs`: Comprehensive enterprise toolkit covering Inventory, Production MES, Sales, Purchasing, Finance, and R&D.
   - **Warehouse & Inventory Domain**:
-    - `mds_db_lot_balance_query`: Material lot availability and allocation balances (`tbINV_Material_LotBalance`).
-    - `mds_db_stock_in_query`: Goods receipt ticket tracking and supplier delivery inspection.
-    - `mds_db_low_stock_alert`: Automated warehouse scan for inventory below safety threshold.
-    - `mds_db_inv_lot_tracking`: First-Expired-First-Out (FEFO) material routing, location rack tracking, and QC quarantine.
+    - `erp_inventory_lot_balance_query`: Material lot availability and allocation balances.
+    - `erp_inventory_stock_in_create`: Inbound goods receipt ticket creation and validation.
+    - `erp_inventory_stock_transfer`: Inter-warehouse stock transfer dispatch.
+  - **Manufacturing MES & Operations**:
+    - `erp_production_plan_query`: Production execution progress and output tracking by stage.
+    - `erp_production_diary_record`: Shift log entries (output, scrap quantity, downtime).
+    - `erp_maintenance_report_incident`: Machine stoppage and incident dispatch.
+  - **Sales & Engineering**:
+    - `erp_sales_order_query`: Sales order fulfillment tracking.
+    - `erp_sales_packing_audit`: Packing checklist and logistics verification.
+    - `erp_rd_bom_query`: Bill of Materials (BOM) specification inspection.
 - **`ZeroLlmClient` & Grammar-Constrained Tool Calling**:
   - `ZeroLlmClient`: Pure C# in-process SLM client eliminating external HTTP/cloud API latency.
   - `AgentToolRegistry.CreateGrammarProcessor`: Automatically generates `ToolCallGrammarLogitProcessor` for zero-hallucination structured tool calling.

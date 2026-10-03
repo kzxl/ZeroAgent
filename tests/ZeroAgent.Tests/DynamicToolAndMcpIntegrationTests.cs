@@ -10,6 +10,7 @@ using ZeroAgent.Tools.Dynamic;
 using ZeroAgent.Tools.Dynamic.Dispatchers;
 using ZeroAgent.Tools.Dynamic.Model;
 using ZeroAgent.Tools.Dynamic.Provider;
+using ZeroAgent.Tools.Erp;
 using ZeroAgent.Tools.Mcp;
 
 namespace ZeroAgent.Tests
@@ -32,7 +33,7 @@ namespace ZeroAgent.Tests
                     {
                         new ToolDefinitionRecord
                         {
-                            Name = "mds_lot_balance_dynamic",
+                            Name = "erp_lot_balance_dynamic",
                             Description = "Tra cứu số lượng tồn kho theo lô.",
                             Category = "Inventory",
                             ExecutionType = ToolExecutionType.CustomDelegate,
@@ -51,17 +52,17 @@ namespace ZeroAgent.Tests
                 var definitions = await provider.LoadDefinitionsAsync();
 
                 Assert.Single(definitions);
-                Assert.Equal("mds_lot_balance_dynamic", definitions[0].Name);
+                Assert.Equal("erp_lot_balance_dynamic", definitions[0].Name);
 
                 var factory = new DynamicToolFactory();
-                factory.RegisterDelegate("mds_lot_balance_dynamic", arg => "Tồn kho: 5,000 kg, Khả dụng: 4,000 kg");
+                factory.RegisterDelegate("erp_lot_balance_dynamic", arg => "Tồn kho: 5,000 kg, Khả dụng: 4,000 kg");
 
                 var registry = new AgentToolRegistry();
                 var tool = factory.CreateTool(definitions[0]);
                 registry.Register(tool);
 
-                Assert.True(registry.Contains("mds_lot_balance_dynamic"));
-                string result = await registry.ExecuteAsync("mds_lot_balance_dynamic", "{\"lot_no\": \"LOT-01\"}");
+                Assert.True(registry.Contains("erp_lot_balance_dynamic"));
+                string result = await registry.ExecuteAsync("erp_lot_balance_dynamic", "{\"lot_no\": \"LOT-01\"}");
                 Assert.Contains("5,000 kg", result);
             }
             finally
@@ -75,7 +76,7 @@ namespace ZeroAgent.Tests
         {
             var registry = new AgentToolRegistry();
             registry.Register(new AgentTool(
-                "mds_inventory_lot_balance_query",
+                "erp_inventory_lot_balance_query",
                 "Tra cứu số lượng tồn kho theo lô.",
                 "lot_no: string, warehouse_code: string",
                 arg => Task.FromResult("Lô LOT-2026-PP43: Tồn 5,330 kg, Khả dụng 4,014 kg")));
@@ -102,11 +103,11 @@ namespace ZeroAgent.Tests
                 Assert.Equal(2, doc.RootElement.GetProperty("id").GetInt32());
                 var tools = doc.RootElement.GetProperty("result").GetProperty("tools");
                 Assert.True(tools.GetArrayLength() >= 1);
-                Assert.Equal("mds_inventory_lot_balance_query", tools[0].GetProperty("name").GetString());
+                Assert.Equal("erp_inventory_lot_balance_query", tools[0].GetProperty("name").GetString());
             }
 
             // 3. Tools/Call
-            string callReq = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"mds_inventory_lot_balance_query\",\"arguments\":{\"lot_no\":\"LOT-2026-PP43\"}}}";
+            string callReq = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"erp_inventory_lot_balance_query\",\"arguments\":{\"lot_no\":\"LOT-2026-PP43\"}}}";
             string callRes = await mcpServer.ProcessMessageAsync(callReq);
             using (var doc = JsonDocument.Parse(callRes))
             {
@@ -173,31 +174,27 @@ namespace ZeroAgent.Tests
         }
 
         [Fact]
-        public async Task MdsDatabaseToolkit_QueriesRealDatabaseRecords()
+        public async Task EnterpriseErpToolkit_QueriesLotBalanceAndOperations()
         {
             var registry = new AgentToolRegistry();
-            ZeroAgent.Tools.Erp.MdsDatabaseToolkit.RegisterAll(registry);
+            registry.RegisterErpToolkit();
 
-            // 1. Query Lot Balance for LOT-2026-PP43
-            string lotRes = await registry.ExecuteAsync("mds_db_lot_balance_query", "{\"lot_no\": \"LOT-2026-PP43\", \"warehouse_code\": \"KNVLSX\"}");
-            Assert.Contains("LOT-2026-PP43", lotRes);
-            Assert.Contains("4014", lotRes);
-            Assert.Contains("KNVLSX", lotRes);
+            // 1. Query Lot Balance for LOT-2026-PP01
+            string lotRes = await registry.ExecuteAsync("erp_inventory_lot_balance_query", "{\"lot_no\": \"LOT-2026-PP01\", \"warehouse_code\": \"WH-MAT-01\"}");
+            Assert.Contains("LOT-2026-PP01", lotRes);
+            Assert.Contains("3300", lotRes);
+            Assert.Contains("WH-MAT-01", lotRes);
 
-            // 2. Query Stock In Ticket PN-NVL-2026-6380
-            string stockInRes = await registry.ExecuteAsync("mds_db_stock_in_query", "{\"ticket_code\": \"PN-NVL-2026-6380\"}");
-            Assert.Contains("PN-NVL-2026-6380", stockInRes);
-            Assert.Contains("CTYMLG01", stockInRes);
-            Assert.Contains("Công ty Cổ Phần Mỹ Lan", stockInRes);
+            // 2. Query Production Plan
+            string planRes = await registry.ExecuteAsync("erp_production_plan_query", "{\"process_stage\": \"Extrusion\", \"line_code\": \"EXT-01\"}");
+            Assert.Contains("Extrusion", planRes);
+            Assert.Contains("WO-2026-0412", planRes);
+            Assert.Contains("9600", planRes);
 
-            // 3. Low Stock Alert (Threshold 1000 kg)
-            string alertRes = await registry.ExecuteAsync("mds_db_low_stock_alert", "{\"threshold_kg\": 1000}");
-            Assert.Contains("LOT-2026-MB05", alertRes);
-            Assert.Contains("LOT-2026-PET08", alertRes);
-
-            // 4. Non-existent lot
-            string notFoundRes = await registry.ExecuteAsync("mds_db_lot_balance_query", "{\"lot_no\": \"LOT-9999-NOTFOUND\"}");
-            Assert.Contains("Không tìm thấy dữ liệu", notFoundRes);
+            // 3. Query Sales Order
+            string orderRes = await registry.ExecuteAsync("erp_sales_order_query", "{\"order_code\": \"SO-2026-0881\", \"agency\": \"HQ\"}");
+            Assert.Contains("SO-2026-0881", orderRes);
+            Assert.Contains("Global Packaging Solutions Ltd.", orderRes);
         }
     }
 }
