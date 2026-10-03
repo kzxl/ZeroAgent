@@ -237,5 +237,18 @@ namespace ZeroAgent.Core.Tools
             sb.Append("]");
             return sb.ToString();
         }
+
+        /// <summary>
+        /// Creates a ToolCallGrammarLogitProcessor enforcing schema-constrained decoding for all registered tools.
+        /// </summary>
+        public ToolCallGrammarLogitProcessor CreateGrammarProcessor(ZeroTokenizer.Core.Abstractions.ITokenizer tokenizer)
+        {
+            var schemas = new Dictionary<string, JsonSchemaConstraint>(StringComparer.OrdinalIgnoreCase);
+            foreach (var tool in _tools.Values)
+            {
+                schemas[tool.Name] = tool.Schema ?? new JsonSchemaConstraint(tool.Name);
+            }
+            return new ToolCallGrammarLogitProcessor(tokenizer, schemas);
+        }
     }
 }
