@@ -171,5 +171,33 @@ namespace ZeroAgent.Tests
             Assert.Contains("Safety Policy Violation", result);
             Assert.Contains("strictly forbids data modification", result);
         }
+
+        [Fact]
+        public async Task MdsDatabaseToolkit_QueriesRealDatabaseRecords()
+        {
+            var registry = new AgentToolRegistry();
+            ZeroAgent.Tools.Erp.MdsDatabaseToolkit.RegisterAll(registry);
+
+            // 1. Query Lot Balance for LOT-2026-PP43
+            string lotRes = await registry.ExecuteAsync("mds_db_lot_balance_query", "{\"lot_no\": \"LOT-2026-PP43\", \"warehouse_code\": \"KNVLSX\"}");
+            Assert.Contains("LOT-2026-PP43", lotRes);
+            Assert.Contains("4014", lotRes);
+            Assert.Contains("KNVLSX", lotRes);
+
+            // 2. Query Stock In Ticket PN-NVL-2026-6380
+            string stockInRes = await registry.ExecuteAsync("mds_db_stock_in_query", "{\"ticket_code\": \"PN-NVL-2026-6380\"}");
+            Assert.Contains("PN-NVL-2026-6380", stockInRes);
+            Assert.Contains("CTYMLG01", stockInRes);
+            Assert.Contains("Công ty Cổ Phần Mỹ Lan", stockInRes);
+
+            // 3. Low Stock Alert (Threshold 1000 kg)
+            string alertRes = await registry.ExecuteAsync("mds_db_low_stock_alert", "{\"threshold_kg\": 1000}");
+            Assert.Contains("LOT-2026-MB05", alertRes);
+            Assert.Contains("LOT-2026-PET08", alertRes);
+
+            // 4. Non-existent lot
+            string notFoundRes = await registry.ExecuteAsync("mds_db_lot_balance_query", "{\"lot_no\": \"LOT-9999-NOTFOUND\"}");
+            Assert.Contains("Không tìm thấy dữ liệu", notFoundRes);
+        }
     }
 }
