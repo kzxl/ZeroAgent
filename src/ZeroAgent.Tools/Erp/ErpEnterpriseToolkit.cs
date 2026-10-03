@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -7,19 +8,16 @@ using ZeroAgent.Core.Tools;
 
 namespace ZeroAgent.Tools.Erp
 {
-    /// <summary>
-    /// Enterprise ERP & MES Toolkit for ZeroAgent.
-    /// Provides 43 standardized operational tools covering:
-    /// - Warehouse Management (WMS): Inventory check, FEFO lot expiry, bin/rack slotting, stock transfer, barcode scan.
-    /// - Manufacturing Execution (MES): Work order progress, BOM checking, OEE, machine breakdown, TPM, shift handover.
-    /// - Sales & CRM: Discount calculation, order tracking, quotation, credit headroom, top-selling analytics.
-    /// - R&amp;D Formulation: Formula revision, BOM version diff, batch cost simulation, active ingredient ratios.
-    /// - Quality & Handover (QC/QA): Inspection record, quarantine flagging, COA approval, handover checklists.
-    /// - Finance & Accounting: Chart of accounts, payable reconciliation, VAT e-invoice, financial summaries.
-    /// - Purchasing & SCM: Purchase requisition (PR), vendor quote comparison, purchase order (PO), delivery tracking.
-    /// </summary>
     public static class ErpEnterpriseToolkit
     {
+        private static readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            WriteIndented = false
+        };
+
+        private static string ToJson(object data) => JsonSerializer.Serialize(data, _jsonOptions);
+
         public static AgentToolRegistry RegisterErpToolkit(this AgentToolRegistry registry)
         {
             RegisterAll(registry);
@@ -316,6 +314,73 @@ namespace ZeroAgent.Tools.Erp
                 "Calculates vendor quality score, on-time delivery (OTD) rate, and defect PPM metric.",
                 "supplier_id: string",
                 ExecuteEvaluateSupplierPerformanceAsync));
+
+            // ==========================================
+            // 8. NATIVE 00.ERP SUBSYSTEMS (MDS, MOP, MLG2, RAF)
+            // ==========================================
+            registry.Register(new AgentTool(
+                "mds_inventory_lot_balance_query",
+                "[00.ERP MDS] Queries lot balance, available quantity, reservations, and expiry across Material, SemiProduct, or Product lots in KNVLSX, KNVLNC, KBTP, KTP.",
+                "lot_no: string, warehouse_code: string, level: string",
+                ExecuteMdsInventoryLotBalanceQueryAsync));
+
+            registry.Register(new AgentTool(
+                "mds_inventory_stock_in_create",
+                "[00.ERP MDS] Creates a Material Stock In ticket (PN-NVL-...) for KNVLSX/KNVLNC from suppliers or EMD/MDS machining.",
+                "warehouse_code: string, in_type: string, supplier_code: string, po_number: string, items: string",
+                ExecuteMdsInventoryStockInCreateAsync,
+                requiresApproval: true));
+
+            registry.Register(new AgentTool(
+                "mds_inventory_stock_transfer",
+                "[00.ERP MDS] Creates an internal stock transfer between KNVLSX, KNVLNC, KNVLT, and KBTP.",
+                "from_warehouse: string, to_warehouse: string, item_code: string, quantity: double, reason: string",
+                ExecuteMdsInventoryStockTransferAsync,
+                requiresApproval: true));
+
+            registry.Register(new AgentTool(
+                "mop_production_plan_query",
+                "[00.ERP MOP] Queries manufacturing plan and execution progress by process stage (Extrusion, Thermoforming, Cutting, Flexo, Lamination, Slitter, KCS).",
+                "process_stage: string, line_code: string, plan_date: string",
+                ExecuteMopProductionPlanQueryAsync));
+
+            registry.Register(new AgentTool(
+                "mop_production_diary_record",
+                "[00.ERP MOP] Records production shift diary (output, scrap quantity, downtime minutes, operator notes).",
+                "shift_name: string, process_stage: string, operator: string, completed_qty: double, scrap_qty: double, downtime_minutes: int, notes: string",
+                ExecuteMopProductionDiaryRecordAsync));
+
+            registry.Register(new AgentTool(
+                "mop_maintenance_report_incident",
+                "[00.ERP MOP] Reports urgent machine stoppage breakdown incident and dispatches mechanical/electrical maintenance crew.",
+                "machine_code: string, issue_description: string, priority: string, line_code: string",
+                ExecuteMopMaintenanceReportIncidentAsync,
+                requiresApproval: true));
+
+            registry.Register(new AgentTool(
+                "mds_sales_order_query",
+                "[00.ERP MDS] Queries sales orders by agency (MYLAN, RTVN, RTSG) and order prefix (MLG, OC, RT, SAL).",
+                "order_code: string, agency: string",
+                ExecuteMdsSalesOrderQueryAsync));
+
+            registry.Register(new AgentTool(
+                "mds_sales_packing_audit",
+                "[00.ERP MDS] Audits sales order carton packing log, delays, and approval trail (TeamLeader, Logistics, MDSStaff).",
+                "packing_id: string, order_code: string",
+                ExecuteMdsSalesPackingAuditAsync));
+
+            registry.Register(new AgentTool(
+                "mds_rd_bom_query",
+                "[00.ERP RAF/MDS] Queries technical Bill of Materials (BOM) or PartList specifications and release status.",
+                "product_code: string, status: string, bom_type: string",
+                ExecuteMdsRdBomQueryAsync));
+
+            registry.Register(new AgentTool(
+                "erp_approval_execute",
+                "[00.ERP Common] Executes approval or revoke approval workflow for enterprise tickets with role-based checks.",
+                "feature_code: string, ticket_id: string, action_type: string, approver_role: string, reason: string",
+                ExecuteErpApprovalExecuteAsync,
+                requiresApproval: true));
         }
 
         #region Argument Parsing Helpers
@@ -394,9 +459,9 @@ namespace ZeroAgent.Tools.Erp
         {
             var p = ParseArgs(arg);
             string sku = GetStr(p, "sku", "SKU-PL01");
-            string fromWh = GetStr(p, "from_warehouse", "Kho Bình Dương");
-            string toWh = GetStr(p, "to_warehouse", "Kho Tân Bình");
-            int qty = GetInt(p, "quantity", 100);
+            string fromWh = GetStr(p, "from_warehouse", GetStr(p, "from", "Kho Bình Dương"));
+            string toWh = GetStr(p, "to_warehouse", GetStr(p, "to", "Kho Tân Bình"));
+            int qty = GetInt(p, "quantity", GetInt(p, "qty", 100));
             string trfId = $"TRF-2026-{DateTime.UtcNow:MMddHHmm}";
 
             return Task.FromResult(JsonSerializer.Serialize(new
@@ -1163,6 +1228,229 @@ namespace ZeroAgent.Tools.Erp
                 defect_ppm = 120,
                 overall_score = 4.85,
                 tier = "Tier-1 Strategic Partner"
+            }));
+        }
+
+        // 8. Native 00.ERP Implementations (MDS, MOP, MLG2, RAF)
+        private static Task<string> ExecuteMdsInventoryLotBalanceQueryAsync(string arg)
+        {
+            var p = ParseArgs(arg);
+            string lot = GetStr(p, "lot_no", "LOT-2026-PP01");
+            string wh = GetStr(p, "warehouse_code", "KNVLSX");
+            string level = GetStr(p, "level", "Material");
+
+            return Task.FromResult(ToJson(new
+            {
+                lot_no = lot,
+                item_code = "NVL-PP-500",
+                item_name = "Hạt nhựa Polypropylene nguyên sinh",
+                warehouse_code = wh,
+                warehouse_name = wh == "KNVLSX" ? "NVL sản xuất" : (wh == "KNVLNC" ? "NVL nghiên cứu" : wh),
+                level = level,
+                quantity_on_hand = 4500.0,
+                quantity_allocated = 1200.0,
+                quantity_available = 3300.0,
+                uom = "kg",
+                expiry_date = "2027-06-30",
+                status = "Đã nhập kho"
+            }));
+        }
+
+        private static Task<string> ExecuteMdsInventoryStockInCreateAsync(string arg)
+        {
+            var p = ParseArgs(arg);
+            string wh = GetStr(p, "warehouse_code", "KNVLSX");
+            string inType = GetStr(p, "in_type", "Nguyên vật liệu");
+            string supp = GetStr(p, "supplier_code", "CTYMLG01");
+            string po = GetStr(p, "po_number", "PO-2026-0812");
+            string ticketId = $"PN-NVL-2026-{DateTime.UtcNow:MMddHHmm}";
+
+            return Task.FromResult(ToJson(new
+            {
+                ticket_id = ticketId,
+                warehouse_code = wh,
+                in_type = inType,
+                supplier_code = supp,
+                po_number = po,
+                status = "Đang cập nhật",
+                message = "Lưu thông tin thành công",
+                created_at = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss")
+            }));
+        }
+
+        private static Task<string> ExecuteMdsInventoryStockTransferAsync(string arg)
+        {
+            var p = ParseArgs(arg);
+            string fromWh = GetStr(p, "from_warehouse", "KNVLSX");
+            string toWh = GetStr(p, "to_warehouse", "KNVLNC");
+            string item = GetStr(p, "item_code", "NVL-PP-500");
+            double qty = GetDouble(p, "quantity", 500.0);
+            string transferId = $"PX-TRF-2026-{DateTime.UtcNow:MMddHHmm}";
+
+            return Task.FromResult(ToJson(new
+            {
+                transfer_ticket_id = transferId,
+                from_warehouse = fromWh,
+                to_warehouse = toWh,
+                item_code = item,
+                quantity = qty,
+                status = "Chờ xuất kho",
+                message = $"Đã chuyển phiếu sang {toWh}"
+            }));
+        }
+
+        private static Task<string> ExecuteMopProductionPlanQueryAsync(string arg)
+        {
+            var p = ParseArgs(arg);
+            string stage = GetStr(p, "process_stage", "Extrusion");
+            string line = GetStr(p, "line_code", "EXT-01");
+            string planDate = GetStr(p, "plan_date", "today");
+
+            return Task.FromResult(ToJson(new
+            {
+                process_stage = stage,
+                line_code = line,
+                plan_date = planDate,
+                shift = "Ca 1",
+                work_order = "LSX-2026-0412",
+                product_name = stage == "Extrusion" ? "Màng nhựa cuộn PP trắng sứ 0.6mm" : "Khay định hình PET 150ml",
+                planned_qty = stage == "Extrusion" ? 12000.0 : 25000.0,
+                completed_qty = stage == "Extrusion" ? 9600.0 : 18500.0,
+                progress_percent = stage == "Extrusion" ? 80.0 : 74.0,
+                scrap_qty = stage == "Extrusion" ? 140.0 : 210.0,
+                status = "Running"
+            }));
+        }
+
+        private static Task<string> ExecuteMopProductionDiaryRecordAsync(string arg)
+        {
+            var p = ParseArgs(arg);
+            string shift = GetStr(p, "shift_name", "Ca 1");
+            string stage = GetStr(p, "process_stage", "Extrusion");
+            string op = GetStr(p, "operator", "Nguyễn Văn B");
+            double completed = GetDouble(p, "completed_qty", 9600.0);
+            double scrap = GetDouble(p, "scrap_qty", 140.0);
+            int downtime = GetInt(p, "downtime_minutes", 15);
+            string notes = GetStr(p, "notes", "Chạy ổn định, không có sự cố");
+
+            return Task.FromResult(ToJson(new
+            {
+                diary_id = $"LOG-MOP-{DateTime.UtcNow:yyyyMMdd-HHmm}",
+                shift_name = shift,
+                process_stage = stage,
+                operator_name = op,
+                completed_qty = completed,
+                scrap_qty = scrap,
+                downtime_minutes = downtime,
+                notes = notes,
+                status = "Recorded",
+                message = "Lưu thông tin thành công"
+            }));
+        }
+
+        private static Task<string> ExecuteMopMaintenanceReportIncidentAsync(string arg)
+        {
+            var p = ParseArgs(arg);
+            string machine = GetStr(p, "machine_code", "TF-03");
+            string issue = GetStr(p, "issue_description", "Kẹt van gia nhiệt buồng sấy");
+            string priority = GetStr(p, "priority", "HIGH");
+            string line = GetStr(p, "line_code", "Line-02");
+
+            return Task.FromResult(ToJson(new
+            {
+                incident_id = $"INC-MOP-2026-{DateTime.UtcNow:MMddHHmm}",
+                machine_code = machine,
+                line_code = line,
+                issue = issue,
+                priority = priority,
+                status = "Dispatched",
+                assigned_team = "Đội Bảo trì Cơ điện Phân xưởng 2",
+                dispatched_at = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss")
+            }));
+        }
+
+        private static Task<string> ExecuteMdsSalesOrderQueryAsync(string arg)
+        {
+            var p = ParseArgs(arg);
+            string orderCode = GetStr(p, "order_code", "MLG-2026-0881");
+            string agency = GetStr(p, "agency", "MYLAN");
+
+            return Task.FromResult(ToJson(new
+            {
+                order_code = orderCode,
+                agency = agency,
+                customer_name = "Công ty TNHH Bao Bì Á Châu",
+                total_amount_vnd = 850000000.0,
+                order_status = "Approved",
+                packing_id = "PACK-2026-0312",
+                packing_status = "LogisticsApproved",
+                delivery_date = DateTime.UtcNow.AddDays(2).ToString("yyyy-MM-dd")
+            }));
+        }
+
+        private static Task<string> ExecuteMdsSalesPackingAuditAsync(string arg)
+        {
+            var p = ParseArgs(arg);
+            string packingId = GetStr(p, "packing_id", "PACK-2026-0312");
+            string orderCode = GetStr(p, "order_code", "MLG-2026-0881");
+
+            return Task.FromResult(ToJson(new
+            {
+                packing_id = packingId,
+                order_code = orderCode,
+                team_leader_approved = true,
+                logistics_approved = true,
+                mds_staff_approved = true,
+                is_delay = false,
+                carton_package_calculated = true,
+                status = "ReadyForShipment"
+            }));
+        }
+
+        private static Task<string> ExecuteMdsRdBomQueryAsync(string arg)
+        {
+            var p = ParseArgs(arg);
+            string prod = GetStr(p, "product_code", "PP-LID-120");
+            string status = GetStr(p, "status", "Release");
+
+            var materials = new[]
+            {
+                new { item_code = "NVL-PP-500", name = "Nhựa PP nguyên sinh", standard_qty = 0.015, unit = "kg" },
+                new { item_code = "NVL-MB-WHITE", name = "Hạt màu trắng sứ Masterbatch", standard_qty = 0.0003, unit = "kg" }
+            };
+
+            return Task.FromResult(ToJson(new
+            {
+                product_code = prod,
+                product_name = "Nắp hộp thực phẩm PP 120mm",
+                bom_code = "BOM-PPLID-v2.1",
+                status = status,
+                approval_user = "Trưởng phòng R&D",
+                effective_date = "2026-08-15",
+                materials = materials
+            }));
+        }
+
+        private static Task<string> ExecuteErpApprovalExecuteAsync(string arg)
+        {
+            var p = ParseArgs(arg);
+            string feature = GetStr(p, "feature_code", "MDS.Inventory.Material.StockIn");
+            string ticket = GetStr(p, "ticket_id", "PN-NVL-2026-0042");
+            string action = GetStr(p, "action_type", "Approve");
+            string role = GetStr(p, "approver_role", "Leader");
+            string reason = GetStr(p, "reason", "Đạt chuẩn nghiệm thu");
+
+            return Task.FromResult(ToJson(new
+            {
+                success = true,
+                feature_code = feature,
+                ticket_id = ticket,
+                action = action,
+                approver_role = role,
+                reason = reason,
+                new_status = action == "Approve" ? "Đã duyệt" : "Đang cập nhật",
+                message = "Lưu thông tin thành công",
+                approved_at = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss")
             }));
         }
 

@@ -122,5 +122,46 @@ namespace ZeroAgent.Tests
             Assert.Contains("ApprovedByChiefAccountant", result);
             Assert.Contains("PC-2026", result);
         }
+
+        [Fact]
+        public async Task Native00ErpTools_ExecuteAndValidateContracts()
+        {
+            var registry = new AgentToolRegistry();
+            registry.ApprovalHandler = (tool, arg) => Task.FromResult(true);
+            registry.RegisterErpToolkit();
+
+            // 1. MDS LotBalance Query
+            string lotRes = await registry.ExecuteAsync("mds_inventory_lot_balance_query", "lot_no='LOT-2026-PP01', warehouse_code='KNVLSX'");
+            Assert.Contains("KNVLSX", lotRes);
+            Assert.Contains("NVL sản xuất", lotRes);
+            Assert.Contains("quantity_available", lotRes);
+
+            // 2. MOP Production Plan Query (Extrusion / Thermoforming)
+            string planRes = await registry.ExecuteAsync("mop_production_plan_query", "process_stage='Extrusion', line_code='EXT-01'");
+            Assert.Contains("Extrusion", planRes);
+            Assert.Contains("LSX-2026", planRes);
+            Assert.Contains("progress_percent", planRes);
+
+            // 3. MDS Sales Order Query (Prefix MLG-, Agency MYLAN)
+            string orderRes = await registry.ExecuteAsync("mds_sales_order_query", "order_code='MLG-2026-0881', agency='MYLAN'");
+            Assert.Contains("MLG-2026-0881", orderRes);
+            Assert.Contains("MYLAN", orderRes);
+            Assert.Contains("PACK-2026", orderRes);
+
+            // 4. MDS Sales Packing Audit
+            string packRes = await registry.ExecuteAsync("mds_sales_packing_audit", "packing_id='PACK-2026-0312'");
+            Assert.Contains("team_leader_approved", packRes);
+            Assert.Contains("logistics_approved", packRes);
+
+            // 5. MDS / RAF RD BOM Query
+            string bomRes = await registry.ExecuteAsync("mds_rd_bom_query", "product_code='PP-LID-120', status='Release'");
+            Assert.Contains("BOM-PPLID-v2.1", bomRes);
+            Assert.Contains("NVL-PP-500", bomRes);
+
+            // 6. Common ERP Approval Execute
+            string appRes = await registry.ExecuteAsync("erp_approval_execute", "feature_code='MDS.Inventory.Material.StockIn', ticket_id='PN-NVL-2026-0042', action_type='Approve', approver_role='Leader'");
+            Assert.Contains("Đã duyệt", appRes);
+            Assert.Contains("Lưu thông tin thành công", appRes);
+        }
     }
 }
