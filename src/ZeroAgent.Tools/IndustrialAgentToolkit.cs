@@ -1,6 +1,7 @@
 using System;
 using ZeroAgent.Core.Tools;
 using ZeroAgent.Tools.Data;
+using ZeroAgent.Tools.Erp;
 using ZeroAgent.Tools.Industrial;
 using ZeroAgent.Tools.Safety;
 using ZeroAgent.Tools.Storage;
@@ -34,6 +35,7 @@ namespace ZeroAgent.Tools
             HostTelemetryTool.RegisterAll(registry);
             DataFrameQueryTool.RegisterAll(registry);
             DynamicDatabaseQueryTool.RegisterAll(registry);
+            ErpEnterpriseToolkit.RegisterAll(registry);
 
             return registry;
         }
