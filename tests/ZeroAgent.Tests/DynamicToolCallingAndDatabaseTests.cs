@@ -6,6 +6,7 @@ using ZeroAgent.Core.Tools;
 using ZeroAgent.Dialog;
 using ZeroAgent.Dialog.DST;
 using ZeroAgent.Tools.Data;
+using ZeroAgent.Tools.Erp;
 
 namespace ZeroAgent.Tests
 {
@@ -190,6 +191,67 @@ namespace ZeroAgent.Tests
             Assert.True(ok2);
             Assert.Equal("mds_db_low_stock_alert", req2.ToolName);
             Assert.Contains("50", req2.ArgumentsJson);
+        }
+
+        [Fact]
+        public async Task MdsDatabaseToolkit_SalesOrder_Query_ReturnsValidOrderAndItems()
+        {
+            var registry = new AgentToolRegistry();
+            MdsDatabaseToolkit.RegisterAll(registry);
+
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_query", "{\"order_id\": \"sal26-Test\"}"));
+            Assert.True(res.Success);
+            Assert.Contains("sal26-Test", res.Content);
+            Assert.Contains("KH-MDS-TEST", res.Content);
+            Assert.Contains("SP-KHAY-01", res.Content);
+            Assert.Contains("Draft", res.Content);
+        }
+
+        [Fact]
+        public async Task MdsDatabaseToolkit_SalesOrder_DeliveryStatus_CalculatesAccuratePercentages()
+        {
+            var registry = new AgentToolRegistry();
+            MdsDatabaseToolkit.RegisterAll(registry);
+
+            // MLG26-1562 has 50 + 100 ordered, 30 + 50 delivered = 80 / 150 = 53.3%
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_delivery_status", "{\"order_id\": \"MLG26-1562\"}"));
+            Assert.True(res.Success);
+            Assert.Contains("MLG26-1562", res.Content);
+            Assert.Contains("53.3", res.Content);
+            Assert.Contains("Đang giao hàng từng phần", res.Content);
+        }
+
+        [Fact]
+        public async Task MdsDatabaseToolkit_SalesOrder_InventoryCheck_EvaluatesAtpStatus()
+        {
+            var registry = new AgentToolRegistry();
+            MdsDatabaseToolkit.RegisterAll(registry);
+
+            // SO-2026-MDS01 requires 1000kg PP (rem) and 2500kg HDPE (rem).
+            // Stock has 4014kg PP available and 10000kg HDPE available -> All fulfillable!
+            var res = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_inventory_check", "{\"order_id\": \"SO-2026-MDS01\"}"));
+            Assert.True(res.Success);
+            Assert.Contains("SO-2026-MDS01", res.Content);
+            Assert.Contains("KHẢ DỤNG - ĐỦ HÀNG GIAO NGAY", res.Content);
+        }
+
+        [Fact]
+        public async Task MdsDatabaseToolkit_SalesOrder_Cancel_RejectsIfDeliveryInProgress_AndAllowsIfClean()
+        {
+            var registry = new AgentToolRegistry();
+            MdsDatabaseToolkit.RegisterAll(registry);
+
+            // 1. Rejects cancellation for MLG26-1562 because deliveredQty > 0
+            var resReject = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_cancel_or_update", "{\"order_id\": \"MLG26-1562\", \"new_status\": \"Cancelled\"}"));
+            Assert.True(resReject.Success);
+            Assert.Contains("VIOLATION_DELIVERY_IN_PROGRESS", resReject.Content);
+            Assert.Contains("Không thể hủy đơn hàng", resReject.Content);
+
+            // 2. Allows cancellation for sal26-Test (deliveredQty == 0)
+            var resAllow = await registry.ExecuteCallAsync(new ToolCallRequest("mds_db_so_cancel_or_update", "{\"order_id\": \"sal26-Test\", \"new_status\": \"Cancelled\"}"));
+            Assert.True(resAllow.Success);
+            Assert.Contains("\"success\":true", resAllow.Content);
+            Assert.Contains("Cancelled", resAllow.Content);
         }
     }
 }

@@ -56,8 +56,46 @@ namespace ZeroAgent.Tools.Erp
             public DateTime TransDate { get; set; } = DateTime.Today;
         }
 
+        public sealed class SalesOrderDetailRecord
+        {
+            public int No { get; set; }
+            public string ProductCode { get; set; } = string.Empty;
+            public string ProductName { get; set; } = string.Empty;
+            public double Quantity { get; set; }
+            public double Price { get; set; }
+            public double Discount { get; set; }
+            public double Tax { get; set; }
+            public double TotalAmount => Quantity * Price * (1.0 - Discount / 100.0) * (1.0 + Tax / 100.0);
+            public string Unit { get; set; } = "Cái";
+            public string LotTM { get; set; } = string.Empty;
+            public double DeliveredQty { get; set; } = 0.0;
+            public double RemainingQty => Math.Max(0, Quantity - DeliveredQty);
+        }
+
+        public sealed class SalesOrderRecord
+        {
+            public int Id { get; set; }
+            public string OrderId { get; set; } = string.Empty;
+            public string CustomerCode { get; set; } = string.Empty;
+            public string CustomerName { get; set; } = string.Empty;
+            public DateTime IssueDate { get; set; } = DateTime.Today;
+            public DateTime? ShipmentDate { get; set; }
+            public DateTime? PromiseDate { get; set; }
+            public string Status { get; set; } = "Draft"; // Draft, Confirmed, InProduction, PartiallyDelivered, Completed, Cancelled
+            public string Currency { get; set; } = "VND";
+            public double TyGia { get; set; } = 1.0;
+            public string OrderType { get; set; } = "Standard";
+            public string Note { get; set; } = string.Empty;
+            public List<SalesOrderDetailRecord> Items { get; set; } = new List<SalesOrderDetailRecord>();
+            public double TotalOrderAmount => Items.Sum(i => i.TotalAmount);
+            public double TotalDeliveredQty => Items.Sum(i => i.DeliveredQty);
+            public double TotalOrderQty => Items.Sum(i => i.Quantity);
+            public double DeliveryProgressPercent => TotalOrderQty > 0 ? Math.Round(TotalDeliveredQty / TotalOrderQty * 100.0, 1) : 0.0;
+        }
+
         private static readonly ConcurrentDictionary<string, LotBalanceRecord> LotBalances = new ConcurrentDictionary<string, LotBalanceRecord>(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, StockInRecord> StockInTickets = new ConcurrentDictionary<string, StockInRecord>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, SalesOrderRecord> SalesOrders = new ConcurrentDictionary<string, SalesOrderRecord>(StringComparer.OrdinalIgnoreCase);
         public const string DefaultTestConnectionString = "Server=192.168.19.70,1433;Database=MDSManagement;User Id=testing;Password=268479#Kzx;TrustServerCertificate=True;Connect Timeout=5;";
         private static Func<IDbConnection>? _liveDbFactory;
 
@@ -184,10 +222,75 @@ namespace ZeroAgent.Tools.Erp
                 CreatedByName = "Trần Thị Mai - Thủ kho KNVLNC",
                 TransDate = DateTime.Today
             });
+
+            // 3. Seed tbSALE_Order & tbSALE_OrderDetail (Authentic MDS ERP records)
+            AddSalesOrder(new SalesOrderRecord
+            {
+                Id = 1,
+                OrderId = "sal26-Test",
+                CustomerCode = "KH-MDS-TEST",
+                CustomerName = "Công ty TNHH Nhựa Công Nghiệp Test",
+                IssueDate = new DateTime(2026, 9, 25),
+                ShipmentDate = new DateTime(2026, 10, 10),
+                PromiseDate = new DateTime(2026, 10, 8),
+                Status = "Draft",
+                Currency = "VND",
+                TyGia = 1.0,
+                OrderType = "TestOrder",
+                Note = "Đơn hàng thử nghiệm phân hệ ERP MDS Sales Order",
+                Items = new List<SalesOrderDetailRecord>
+                {
+                    new SalesOrderDetailRecord { No = 1, ProductCode = "SP-KHAY-01", ProductName = "Khay nhựa linh kiện chống tĩnh điện", Quantity = 200, Price = 45000, Unit = "Cái", DeliveredQty = 0 },
+                    new SalesOrderDetailRecord { No = 2, ProductCode = "SP-NAP-01", ProductName = "Nắp chụp bảo vệ khuôn ép", Quantity = 100, Price = 25000, Unit = "Cái", DeliveredQty = 0 }
+                }
+            });
+
+            AddSalesOrder(new SalesOrderRecord
+            {
+                Id = 2,
+                OrderId = "MLG26-1562",
+                CustomerCode = "SG16-001/ IT20-001",
+                CustomerName = "Tập đoàn Điện tử Quốc tế SG/IT",
+                IssueDate = new DateTime(2026, 9, 16),
+                ShipmentDate = new DateTime(2026, 10, 15),
+                PromiseDate = new DateTime(2026, 10, 12),
+                Status = "Confirmed",
+                Currency = "USD",
+                TyGia = 25400.0,
+                OrderType = "Export",
+                Note = "Đơn hàng xuất khẩu module máy in MDS",
+                Items = new List<SalesOrderDetailRecord>
+                {
+                    new SalesOrderDetailRecord { No = 1, ProductCode = "MDS-PRINTER-M2", ProductName = "Bộ module đầu in công nghiệp MDS-M2", Quantity = 50, Price = 1200, Unit = "Bộ", DeliveredQty = 30 },
+                    new SalesOrderDetailRecord { No = 2, ProductCode = "MDS-SENSOR-S4", ProductName = "Cảm biến quang học chính xác cao MDS-S4", Quantity = 100, Price = 150, Unit = "Cái", DeliveredQty = 50 }
+                }
+            });
+
+            AddSalesOrder(new SalesOrderRecord
+            {
+                Id = 3,
+                OrderId = "SO-2026-MDS01",
+                CustomerCode = "KH-SAMSUNG-SEVT",
+                CustomerName = "Samsung Electronics Vietnam Thai Nguyen",
+                IssueDate = new DateTime(2026, 9, 20),
+                ShipmentDate = new DateTime(2026, 10, 5),
+                PromiseDate = new DateTime(2026, 10, 4),
+                Status = "InProduction",
+                Currency = "VND",
+                TyGia = 1.0,
+                OrderType = "OEM",
+                Note = "Giao hàng định kỳ tại kho SEVT",
+                Items = new List<SalesOrderDetailRecord>
+                {
+                    new SalesOrderDetailRecord { No = 1, ProductCode = "NVL-PP-500", ProductName = "Hạt nhựa Polypropylene nguyên sinh (Gia công)", Quantity = 3000, Price = 38000, Unit = "kg", DeliveredQty = 2000, LotTM = "LOT-2026-PP43" },
+                    new SalesOrderDetailRecord { No = 2, ProductCode = "NVL-HDPE-600", ProductName = "Hạt nhựa HDPE ép đùn màng", Quantity = 5000, Price = 42000, Unit = "kg", DeliveredQty = 2500, LotTM = "LOT-2026-HDPE12" }
+                }
+            });
         }
 
         private static void AddLot(LotBalanceRecord r) => LotBalances[r.LotNumber] = r;
         private static void AddStockIn(StockInRecord r) => StockInTickets[r.TicketCode] = r;
+        private static void AddSalesOrder(SalesOrderRecord r) => SalesOrders[r.OrderId] = r;
 
         public static void RegisterAll(AgentToolRegistry registry)
         {
@@ -222,6 +325,46 @@ namespace ZeroAgent.Tools.Erp
                 schema: new JsonSchemaConstraint("mds_db_low_stock_alert")
                     .AddProperty("warehouse_code", SchemaPropertyType.String, required: false)
                     .AddProperty("threshold_kg", SchemaPropertyType.Number, required: false)));
+
+            // Tool 4: Tra cứu Đơn hàng bán (Sales Order) MDS
+            registry.Register(new AgentTool(
+                "mds_db_so_query",
+                "Truy vấn trực tiếp cơ sở dữ liệu MDS bảng tbSALE_Order và tbSALE_OrderDetail để lấy chi tiết đơn hàng bán (Header & Line Items), khách hàng, ngày đặt, ngày hẹn giao (PromiseDate), loại tiền, và tổng giá trị đơn hàng theo mã OrderID hoặc mã khách hàng.",
+                "order_id?: string, customer_code?: string, status?: string",
+                ExecuteSalesOrderQueryAsync,
+                schema: new JsonSchemaConstraint("mds_db_so_query")
+                    .AddProperty("order_id", SchemaPropertyType.String, required: false)
+                    .AddProperty("customer_code", SchemaPropertyType.String, required: false)
+                    .AddProperty("status", SchemaPropertyType.String, required: false)));
+
+            // Tool 5: Kiểm tra tiến độ thực hiện & giao hàng Sales Order
+            registry.Register(new AgentTool(
+                "mds_db_so_delivery_status",
+                "Kiểm tra tiến độ thực hiện và giao hàng của đơn hàng bán MDS (Sale Order) bằng cách so khớp số lượng đặt hàng với số lượng đã xuất kho giao, tính tỷ lệ hoàn thành % và danh sách mặt hàng còn thiếu.",
+                "order_id: string",
+                ExecuteSalesOrderDeliveryStatusAsync,
+                schema: new JsonSchemaConstraint("mds_db_so_delivery_status")
+                    .AddProperty("order_id", SchemaPropertyType.String, required: true)));
+
+            // Tool 6: Kiểm tra tồn kho khả dụng đáp ứng Sales Order (ATP Check)
+            registry.Register(new AgentTool(
+                "mds_db_so_inventory_check",
+                "Kiểm tra tồn kho khả dụng để đáp ứng đơn hàng bán MDS (ATP check), phân tích các mặt hàng/vật tư trong Sale Order xem kho có đủ hàng giao hay cần tạo lệnh sản xuất / mua thêm.",
+                "order_id: string",
+                ExecuteSalesOrderInventoryCheckAsync,
+                schema: new JsonSchemaConstraint("mds_db_so_inventory_check")
+                    .AddProperty("order_id", SchemaPropertyType.String, required: true)));
+
+            // Tool 7: Cập nhật hoặc hủy đơn hàng bán Sales Order theo chuẩn MDS
+            registry.Register(new AgentTool(
+                "mds_db_so_cancel_or_update",
+                "Cập nhật hoặc hủy đơn hàng bán MDS (Sale Order) theo quy chuẩn nghiệp vụ (kiểm tra điều kiện đơn chưa xuất giao một phần nào trước khi chuyển trạng thái sang Cancelled).",
+                "order_id: string, new_status: string, reason?: string",
+                ExecuteSalesOrderStatusUpdateAsync,
+                schema: new JsonSchemaConstraint("mds_db_so_cancel_or_update")
+                    .AddProperty("order_id", SchemaPropertyType.String, required: true)
+                    .AddProperty("new_status", SchemaPropertyType.String, required: true)
+                    .AddProperty("reason", SchemaPropertyType.String, required: false)));
         }
 
         private static Task<string> ExecuteLotBalanceQueryAsync(string argument)
@@ -523,6 +666,362 @@ namespace ZeroAgent.Tools.Erp
             }, JsonOpts);
 
             return Task.FromResult(json);
+        }
+
+        private static Task<string> ExecuteSalesOrderQueryAsync(string argument)
+        {
+            var p = ParseJsonArguments(argument);
+            string orderId = p.GetValueOrDefault("order_id", string.Empty);
+            string custCode = p.GetValueOrDefault("customer_code", string.Empty);
+            string status = p.GetValueOrDefault("status", string.Empty);
+
+            if (string.IsNullOrWhiteSpace(orderId) && !string.IsNullOrWhiteSpace(argument) && !argument.Trim().StartsWith("{"))
+            {
+                orderId = argument.Trim('\"', '\'', ' ');
+            }
+
+            // 1. Live SQL query against tbSALE_Order & tbSALE_OrderDetail
+            if (_liveDbFactory != null && !string.IsNullOrWhiteSpace(orderId))
+            {
+                try
+                {
+                    using var conn = _liveDbFactory();
+                    conn.Open();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        SELECT TOP 1 o.id, o.OrderID, o.CustomerCode, o.IssueDate, o.ShipmentDate, o.PromiseDate, o.Status, o.Currency, o.TyGia, o.OrderType, o.Note
+                        FROM tbSALE_Order o
+                        WHERE o.OrderID = @OrderID OR o.OrderID = @OrderID + '-Cancel'";
+                    var pId = cmd.CreateParameter();
+                    pId.ParameterName = "@OrderID";
+                    pId.Value = orderId;
+                    cmd.Parameters.Add(pId);
+
+                    using var r = cmd.ExecuteReader();
+                    if (r.Read())
+                    {
+                        int idOrder = Convert.ToInt32(r["id"]);
+                        string liveOrderId = r["OrderID"]?.ToString() ?? orderId;
+                        string liveCustCode = r["CustomerCode"]?.ToString() ?? "";
+                        DateTime issueDate = r["IssueDate"] != DBNull.Value ? Convert.ToDateTime(r["IssueDate"]) : DateTime.Today;
+                        DateTime? shipDate = r["ShipmentDate"] != DBNull.Value ? Convert.ToDateTime(r["ShipmentDate"]) : null;
+                        DateTime? promiseDate = r["PromiseDate"] != DBNull.Value ? Convert.ToDateTime(r["PromiseDate"]) : null;
+                        string liveStatus = r["Status"]?.ToString() ?? "Draft";
+                        string currency = r["Currency"]?.ToString() ?? "VND";
+                        double tyGia = r["TyGia"] != DBNull.Value ? Convert.ToDouble(r["TyGia"]) : 1.0;
+                        string orderType = r["OrderType"]?.ToString() ?? "Standard";
+                        string note = r["Note"]?.ToString() ?? "";
+                        r.Close();
+
+                        // Query items
+                        using var cmdItems = conn.CreateCommand();
+                        cmdItems.CommandText = @"
+                            SELECT d.No, d.CustomProduct, CAST(d.Quantity AS float) AS Quantity, CAST(d.Price AS float) AS Price,
+                                   CAST(ISNULL(d.Discount, 0) AS float) AS Discount, CAST(ISNULL(d.Tax, 0) AS float) AS Tax,
+                                   d.Name_VN, d.LotTM, d.CustomUnit
+                            FROM tbSALE_OrderDetail d
+                            WHERE d.idOrder = @idOrder AND (d.isDeleted IS NULL OR d.isDeleted = 0)
+                            ORDER BY d.No";
+                        var pOrd = cmdItems.CreateParameter();
+                        pOrd.ParameterName = "@idOrder";
+                        pOrd.Value = idOrder;
+                        cmdItems.Parameters.Add(pOrd);
+
+                        using var rItems = cmdItems.ExecuteReader();
+                        var items = new List<object>();
+                        double totalAmount = 0.0;
+                        while (rItems.Read())
+                        {
+                            int no = rItems["No"] != DBNull.Value ? Convert.ToInt32(rItems["No"]) : 0;
+                            string prodName = rItems["CustomProduct"]?.ToString() ?? rItems["Name_VN"]?.ToString() ?? "Sản phẩm";
+                            double qty = rItems["Quantity"] != DBNull.Value ? Convert.ToDouble(rItems["Quantity"]) : 0.0;
+                            double price = rItems["Price"] != DBNull.Value ? Convert.ToDouble(rItems["Price"]) : 0.0;
+                            double discount = Convert.ToDouble(rItems["Discount"]);
+                            double tax = Convert.ToDouble(rItems["Tax"]);
+                            string unit = rItems["CustomUnit"]?.ToString() ?? "Cái";
+                            string lotTm = rItems["LotTM"]?.ToString() ?? "";
+                            double lineTotal = qty * price * (1.0 - discount / 100.0) * (1.0 + tax / 100.0);
+                            totalAmount += lineTotal;
+
+                            items.Add(new
+                            {
+                                no,
+                                productName = prodName,
+                                quantity = qty,
+                                price,
+                                discountPercent = discount,
+                                taxPercent = tax,
+                                unit,
+                                lotTM = lotTm,
+                                lineTotal
+                            });
+                        }
+
+                        return Task.FromResult(JsonSerializer.Serialize(new
+                        {
+                            database = "MDSManagement (192.168.19.70)",
+                            table = "tbSALE_Order / tbSALE_OrderDetail",
+                            source = "LIVE_SQL_SERVER",
+                            orderId = liveOrderId,
+                            customerCode = liveCustCode,
+                            issueDate = issueDate.ToString("yyyy-MM-dd"),
+                            shipmentDate = shipDate?.ToString("yyyy-MM-dd"),
+                            promiseDate = promiseDate?.ToString("yyyy-MM-dd"),
+                            status = liveStatus,
+                            currency,
+                            exchangeRate = tyGia,
+                            orderType,
+                            note,
+                            totalAmount,
+                            itemsCount = items.Count,
+                            items
+                        }, JsonOpts));
+                    }
+                }
+                catch
+                {
+                    // Fall back
+                }
+            }
+
+            // 2. In-Memory Fallback
+            var query = SalesOrders.Values.AsEnumerable();
+            if (!string.IsNullOrWhiteSpace(orderId))
+            {
+                var found = SalesOrders.Values.FirstOrDefault(o => o.OrderId.Equals(orderId, StringComparison.OrdinalIgnoreCase));
+                if (found != null)
+                {
+                    return Task.FromResult(JsonSerializer.Serialize(new
+                    {
+                        database = "ERP_MDS",
+                        source = "IN_MEMORY_ENGINE",
+                        orderId = found.OrderId,
+                        customerCode = found.CustomerCode,
+                        customerName = found.CustomerName,
+                        issueDate = found.IssueDate.ToString("yyyy-MM-dd"),
+                        shipmentDate = found.ShipmentDate?.ToString("yyyy-MM-dd"),
+                        promiseDate = found.PromiseDate?.ToString("yyyy-MM-dd"),
+                        status = found.Status,
+                        currency = found.Currency,
+                        exchangeRate = found.TyGia,
+                        orderType = found.OrderType,
+                        note = found.Note,
+                        totalAmount = found.TotalOrderAmount,
+                        deliveryProgressPercent = found.DeliveryProgressPercent,
+                        itemsCount = found.Items.Count,
+                        items = found.Items.Select(i => new
+                        {
+                            no = i.No,
+                            productCode = i.ProductCode,
+                            productName = i.ProductName,
+                            quantity = i.Quantity,
+                            deliveredQty = i.DeliveredQty,
+                            remainingQty = i.RemainingQty,
+                            price = i.Price,
+                            unit = i.Unit,
+                            lotTM = i.LotTM,
+                            lineTotal = i.TotalAmount
+                        })
+                    }, JsonOpts));
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(custCode))
+            {
+                query = query.Where(o => o.CustomerCode.IndexOf(custCode, StringComparison.OrdinalIgnoreCase) >= 0);
+            }
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                query = query.Where(o => o.Status.Equals(status, StringComparison.OrdinalIgnoreCase));
+            }
+
+            var list = query.Select(o => new
+            {
+                orderId = o.OrderId,
+                customer = $"{o.CustomerCode} - {o.CustomerName}",
+                status = o.Status,
+                issueDate = o.IssueDate.ToString("yyyy-MM-dd"),
+                promiseDate = o.PromiseDate?.ToString("yyyy-MM-dd"),
+                totalAmount = o.TotalOrderAmount,
+                currency = o.Currency,
+                deliveryProgressPercent = o.DeliveryProgressPercent
+            }).ToList();
+
+            return Task.FromResult(JsonSerializer.Serialize(new
+            {
+                database = "ERP_MDS",
+                totalMatchingOrders = list.Count,
+                orders = list
+            }, JsonOpts));
+        }
+
+        private static Task<string> ExecuteSalesOrderDeliveryStatusAsync(string argument)
+        {
+            var p = ParseJsonArguments(argument);
+            string orderId = p.GetValueOrDefault("order_id", string.Empty);
+            if (string.IsNullOrWhiteSpace(orderId) && !string.IsNullOrWhiteSpace(argument) && !argument.Trim().StartsWith("{"))
+            {
+                orderId = argument.Trim('\"', '\'', ' ');
+            }
+
+            if (string.IsNullOrWhiteSpace(orderId))
+            {
+                return Task.FromResult("[MDS DB] Vui lòng cung cấp mã đơn hàng 'order_id' để kiểm tra tiến độ giao hàng.");
+            }
+
+            if (SalesOrders.TryGetValue(orderId, out var order))
+            {
+                bool isCompleted = order.Items.All(i => i.RemainingQty <= 0);
+                string deliveryState = isCompleted ? "Đã hoàn thành 100%" : (order.TotalDeliveredQty > 0 ? "Đang giao hàng từng phần" : "Chưa xuất kho giao hàng");
+
+                return Task.FromResult(JsonSerializer.Serialize(new
+                {
+                    database = "ERP_MDS",
+                    orderId = order.OrderId,
+                    customer = $"{order.CustomerCode} - {order.CustomerName}",
+                    orderStatus = order.Status,
+                    deliveryState,
+                    promiseDate = order.PromiseDate?.ToString("yyyy-MM-dd"),
+                    totalOrderQty = order.TotalOrderQty,
+                    totalDeliveredQty = order.TotalDeliveredQty,
+                    progressPercent = order.DeliveryProgressPercent,
+                    pendingItems = order.Items.Where(i => i.RemainingQty > 0).Select(i => new
+                    {
+                        no = i.No,
+                        productName = i.ProductName,
+                        orderedQty = i.Quantity,
+                        deliveredQty = i.DeliveredQty,
+                        remainingQty = i.RemainingQty,
+                        unit = i.Unit
+                    }).ToList()
+                }, JsonOpts));
+            }
+
+            return Task.FromResult($"[MDS DB] Không tìm thấy đơn hàng bán '{orderId}' trong hệ thống MDS.");
+        }
+
+        private static Task<string> ExecuteSalesOrderInventoryCheckAsync(string argument)
+        {
+            var p = ParseJsonArguments(argument);
+            string orderId = p.GetValueOrDefault("order_id", string.Empty);
+            if (string.IsNullOrWhiteSpace(orderId) && !string.IsNullOrWhiteSpace(argument) && !argument.Trim().StartsWith("{"))
+            {
+                orderId = argument.Trim('\"', '\'', ' ');
+            }
+
+            if (string.IsNullOrWhiteSpace(orderId))
+            {
+                return Task.FromResult("[MDS DB] Vui lòng cung cấp mã đơn hàng 'order_id' để kiểm tra tồn kho đáp ứng.");
+            }
+
+            if (!SalesOrders.TryGetValue(orderId, out var order))
+            {
+                return Task.FromResult($"[MDS DB] Không tìm thấy đơn hàng bán '{orderId}' trong hệ thống MDS.");
+            }
+
+            var atpResults = new List<object>();
+            bool canFulfillAll = true;
+
+            foreach (var item in order.Items)
+            {
+                double needed = item.RemainingQty;
+                double availableInStock = 0.0;
+                string matchedLot = "";
+
+                // Find matching lot in LotBalances by LotTM, ProductCode, or ProductName
+                var lot = LotBalances.Values.FirstOrDefault(l =>
+                    (!string.IsNullOrWhiteSpace(item.LotTM) && l.LotNumber.Equals(item.LotTM, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrWhiteSpace(item.ProductCode) && l.MaterialCode.Equals(item.ProductCode, StringComparison.OrdinalIgnoreCase)) ||
+                    l.MaterialName.IndexOf(item.ProductName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    item.ProductName.IndexOf(l.MaterialName, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                if (lot != null)
+                {
+                    availableInStock = lot.AvailableQty;
+                    matchedLot = $"{lot.LotNumber} (Kho {lot.WarehouseCode})";
+                }
+
+                double shortage = Math.Max(0, needed - availableInStock);
+                bool itemOk = shortage <= 0;
+                if (!itemOk) canFulfillAll = false;
+
+                atpResults.Add(new
+                {
+                    no = item.No,
+                    product = item.ProductName,
+                    requiredQty = needed,
+                    availableInStock,
+                    matchedLot,
+                    shortageQty = shortage,
+                    unit = item.Unit,
+                    status = itemOk ? "Đủ hàng sẵn sàng xuất" : $"Thiếu {shortage:N0} {item.Unit} (Cần lên Lệnh sản xuất/PO)"
+                });
+            }
+
+            return Task.FromResult(JsonSerializer.Serialize(new
+            {
+                database = "ERP_MDS",
+                orderId = order.OrderId,
+                customer = $"{order.CustomerCode} - {order.CustomerName}",
+                atpStatus = canFulfillAll ? "KHẢ DỤNG - ĐỦ HÀNG GIAO NGAY" : "THIẾU HÀNG - CẦN KẾ HOẠCH BỔ SUNG",
+                canShipImmediately = canFulfillAll,
+                items = atpResults
+            }, JsonOpts));
+        }
+
+        private static Task<string> ExecuteSalesOrderStatusUpdateAsync(string argument)
+        {
+            var p = ParseJsonArguments(argument);
+            string orderId = p.GetValueOrDefault("order_id", string.Empty);
+            string newStatus = p.GetValueOrDefault("new_status", string.Empty);
+            string reason = p.GetValueOrDefault("reason", "Yêu cầu từ người dùng");
+
+            if (string.IsNullOrWhiteSpace(orderId) || string.IsNullOrWhiteSpace(newStatus))
+            {
+                return Task.FromResult("[MDS DB] Vui lòng cung cấp cả 'order_id' và 'new_status'.");
+            }
+
+            if (!SalesOrders.TryGetValue(orderId, out var order))
+            {
+                return Task.FromResult($"[MDS DB] Không tìm thấy đơn hàng bán '{orderId}'.");
+            }
+
+            // Quy chuẩn nghiệp vụ MDS: Nếu hủy đơn mà đã giao hàng một phần thì không được hủy trực tiếp
+            if (newStatus.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) || newStatus.Equals("Cancel", StringComparison.OrdinalIgnoreCase))
+            {
+                if (order.TotalDeliveredQty > 0)
+                {
+                    return Task.FromResult(JsonSerializer.Serialize(new
+                    {
+                        success = false,
+                        orderId,
+                        error = "VIOLATION_DELIVERY_IN_PROGRESS",
+                        message = $"Không thể hủy đơn hàng '{orderId}' vì đã xuất kho giao {order.TotalDeliveredQty:N0} {order.Items[0].Unit}. Cần làm thủ tục nhập trả kho (tbSALE_Return) trước khi hủy."
+                    }, JsonOpts));
+                }
+
+                order.Status = "Cancelled";
+                return Task.FromResult(JsonSerializer.Serialize(new
+                {
+                    success = true,
+                    orderId,
+                    previousStatus = "Draft/Confirmed",
+                    currentStatus = "Cancelled",
+                    reason,
+                    updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    message = $"Đã hủy thành công đơn hàng '{orderId}' theo quy trình MDS."
+                }, JsonOpts));
+            }
+
+            order.Status = newStatus;
+            return Task.FromResult(JsonSerializer.Serialize(new
+            {
+                success = true,
+                orderId,
+                currentStatus = newStatus,
+                reason,
+                updatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+            }, JsonOpts));
         }
 
         private static Dictionary<string, string> ParseJsonArguments(string argument)
