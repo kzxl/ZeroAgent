@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
 using ZeroAgent.Core.Database;
+using ZeroAgent.Core.Reasoning.Cognitive;
+using ZeroVector.Core.Quantization;
 
 namespace ZeroAgent.Dialog.Memory
 {
@@ -14,6 +16,11 @@ namespace ZeroAgent.Dialog.Memory
         public bool AutoCachePlans { get; set; } = true;
         public float PruneLowRetentionThreshold { get; set; } = 0.05f;
         public bool AutoCompactDatabase { get; set; } = true;
+
+        // Ouroboros Causal-to-Reflex Consolidation
+        public int MinCausalObservationsForPromotion { get; set; } = 2;
+        public float MinCausalRewardThreshold { get; set; } = 0.80f;
+        public float MinCausalFailureThreshold { get; set; } = -0.70f;
     }
 
     /// <summary>
@@ -22,16 +29,19 @@ namespace ZeroAgent.Dialog.Memory
     public sealed class SleepConsolidationReport
     {
         public int TotalEpisodesScanned { get; set; }
+        public int TotalCausalEdgesScanned { get; set; }
         public int ReflexesSynthesized { get; set; }
         public int ReflexionsGenerated { get; set; }
         public int PlansCached { get; set; }
+        public int CausalReflexesPromoted { get; set; }
+        public int CausalFailuresReflected { get; set; }
         public TimeSpan Elapsed { get; set; }
         public DateTime CompletedAtUtc { get; set; } = DateTime.UtcNow;
     }
 
     /// <summary>
     /// Offline / Idle Cognitive Sleep Consolidator modeled after human memory consolidation during sleep.
-    /// Sweeps short-term episodic experiences (hippocampus tier), extracts repeated patterns and verified resolutions,
+    /// Sweeps short-term episodic experiences (hippocampus tier) and verified causal transitions,
     /// distills them into instant System 1 reflexes (INT8 weights) and semantic plan trajectories,
     /// and prunes decayed memory according to Ebbinghaus forgetting dynamics.
     /// </summary>
@@ -43,6 +53,18 @@ namespace ZeroAgent.Dialog.Memory
         public static SleepConsolidationReport Consolidate(
             AgenticMemoryEngine engine,
             ZabDatabase db,
+            SleepConsolidationOptions? options = null)
+        {
+            return Consolidate(engine, db, causalGraph: null, options);
+        }
+
+        /// <summary>
+        /// Executes an Ouroboros cognitive sleep consolidation cycle including both episodic incidents and causal DAG transitions.
+        /// </summary>
+        public static SleepConsolidationReport Consolidate(
+            AgenticMemoryEngine engine,
+            ZabDatabase db,
+            ZabCausalGraph? causalGraph,
             SleepConsolidationOptions? options = null)
         {
             if (engine == null) throw new ArgumentNullException(nameof(engine));
@@ -96,6 +118,55 @@ namespace ZeroAgent.Dialog.Memory
                             ? "Avoid repeating past failed action paths without verification."
                             : ep.Resolution);
                     report.ReflexionsGenerated++;
+                }
+            }
+
+            // Ouroboros Causal Transition Sweep
+            if (causalGraph != null)
+            {
+                var edges = causalGraph.Edges;
+                report.TotalCausalEdgesScanned = edges.Count;
+
+                for (int i = 0; i < edges.Count; i++)
+                {
+                    var edge = edges[i];
+                    if (edge.ObservationCount >= options.MinCausalObservationsForPromotion &&
+                        edge.Reward >= options.MinCausalRewardThreshold)
+                    {
+                        float[]? dequantized = null;
+                        if (edge.ConditionVectorSq8 != null && edge.Dimension > 0)
+                        {
+                            dequantized = new float[edge.Dimension];
+                            BinaryQuantizer.DequantizeSQ8(edge.ConditionVectorSq8, dequantized, edge.Scale, edge.Offset);
+                        }
+
+                        if (options.AutoCachePlans && !string.IsNullOrWhiteSpace(edge.ActionTaken))
+                        {
+                            db.CachePlan(
+                                goal: edge.Condition,
+                                solution: edge.ActionTaken,
+                                stepsCount: 1,
+                                confidence: edge.Reward,
+                                goalVector: dequantized != null ? dequantized.AsSpan() : ReadOnlySpan<float>.Empty);
+                            report.PlansCached++;
+                        }
+
+                        if (dequantized != null && db.NeuralPolicy != null && !string.IsNullOrWhiteSpace(edge.ActionTaken))
+                        {
+                            db.AdaptNeuralWeights(dequantized, edge.ActionTaken, options.AdaptationLearningRate);
+                            report.ReflexesSynthesized++;
+                            report.CausalReflexesPromoted++;
+                        }
+                    }
+                    else if (edge.Reward <= options.MinCausalFailureThreshold && edge.ObservationCount >= 2)
+                    {
+                        db.AddReflexion(
+                            goal: edge.Condition,
+                            failureReason: $"Causal action '{edge.ActionTaken}' yielded severe failure: {edge.ObservedOutcome}",
+                            lesson: $"Under condition '{edge.Condition}', strictly avoid action '{edge.ActionTaken}'.");
+                        report.ReflexionsGenerated++;
+                        report.CausalFailuresReflected++;
+                    }
                 }
             }
 
